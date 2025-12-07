@@ -1,0 +1,7 @@
+# Private database
+payroll_audit.db
+
+# Private pay stubs (keep directory structure only)
+PayStubs/*
+!PayStubs/.gitkeep
+temp/*

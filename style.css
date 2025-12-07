@@ -1,0 +1,101 @@
+/* --- 1. Container & Global Resets for the Stub Only --- */
+.stub-wrapper {
+    max-width: 1000px;
+    margin: 0 auto;
+    background: white;
+    padding: 20px;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+}
+
+/* --- 2. The Main Table Structure (.els-table) --- */
+.els-table {
+    font-size: 12px;
+    background-color: #fff;
+    border: solid 1px #000;
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.els-table tbody tr td,
+.els-table tbody tr th {
+    border: solid 1px #333;
+    padding: 3px;
+    vertical-align: top;
+}
+
+/* --- 3. Inner Tables (Removes double borders) --- */
+.els-table .table {
+    width: 100%;
+    margin: 0;
+    background-color: transparent;
+    border-collapse: collapse;
+}
+
+.no-border,
+.no-border td,
+.no-border th,
+.els-table .no-border tr td {
+    border: none !important;
+    border-width: 0 !important;
+}
+
+.no-margin-padding {
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+/* --- 4. Column Widths (The "Grid") --- */
+.els-table .col-1 { width: 8%; }
+.els-table .col-2 { width: 17%; }
+.els-table .col-3 { width: 25%; }
+.els-table .col-4 { width: 33%; }
+.els-table .col-5 { width: 42%; }
+.els-table .col-6 { width: 50%; }
+.els-table .col-7 { width: 58%; }
+.els-table .col-8 { width: 67%; }
+.els-table .col-9 { width: 75%; }
+.els-table .col-10 { width: 83%; }
+.els-table .col-11 { width: 92%; }
+.els-table .col-12 { width: 100%; }
+
+/* --- 5. Typography & Colors --- */
+.blue {
+    background-color: #99bce5 !important;
+    font-weight: bold;
+}
+
+.cell-title {
+    font-weight: bold;
+    display: block;
+    font-size: 11px !important;
+    color: #333;
+    margin-bottom: 2px;
+}
+
+.cell-title-lg {
+    font-size: 14px;
+    font-weight: bold;
+    text-transform: uppercase;
+    display: block;
+    text-align: center;
+}
+
+.cell-title-lg2 {
+    font-size: 16px;
+    font-weight: bold;
+    display: block;
+    margin-bottom: 5px;
+}
+
+.text-align-center { text-align: center !important; }
+.text-align-right { text-align: right !important; }
+
+/* --- 6. The "Superpower" Audit Flag (Your Custom Addition) --- */
+.audit-error {
+    color: #e00000 !important; /* Government Red */
+    font-weight: bold !important;
+    background-color: #ffe6e6;
+    border-bottom: 2px dashed #e00000;
+    cursor: help !important;
+    padding: 0 2px;
+}
