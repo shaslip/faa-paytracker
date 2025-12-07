@@ -80,6 +80,4 @@ Your browser will open to `http://localhost:8501`.
 
 ## Troubleshooting
 
-  * **HTML Rendering looks like code:** Ensure you are using the updated `dashboard.py` where indentation was stripped from the HTML strings.
-  * **Tabs look tiny:** Ensure you are using the "Clean" version of `style.css` (not the full raw CSS from Employee Express).
   * **Database Errors:** If the schema changes (e.g., adding new columns), delete `payroll_audit.db` and run `python3 ingest.py` to rebuild it fresh.
