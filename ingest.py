@@ -119,11 +119,11 @@ def parse_html_paystub(html_content, filename, conn):
         print(f"Importing {filename}: {pay_date} (Net: ${net_pay})")
 
         # Insert Master Record
-        c.execute('''INSERT INTO paystubs
-                     (pay_date, period_ending, net_pay, gross_pay, total_deductions, agency, file_source)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                  (pay_date, period_ending, net_pay, gross_pay, total_deducs, agency, filename))
-
+        c.execute('''INSERT INTO paystubs 
+                     (pay_date, period_ending, net_pay, gross_pay, total_deductions, agency, remarks, file_source)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (pay_date, period_ending, net_pay, gross_pay, total_deducs, agency, remarks, filename))
+        
         paystub_id = c.lastrowid # Get the ID of the new row
 
     except AttributeError as e:
