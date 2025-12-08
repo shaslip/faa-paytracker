@@ -264,7 +264,7 @@ def render_paystub(data, flags):
     parts.append('</table></td></tr>')
 
     # 10. Remarks Section
-    remarks_text = stub['remarks'].replace('\n', '<br>') if stub['remarks'] else ""
+    remarks_text = stub.get('remarks', '').replace('\n', '<br>') if stub.get('remarks') else ""
     
     parts.append(f'''
     <tr><td colspan="12" class="blue"><span class="text-align-center cell-title-lg">Remarks</span></td></tr>
