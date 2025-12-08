@@ -118,8 +118,17 @@ def run_full_audit(stub_id):
     flags = {}
 
     # 1. Leave Math
+    # These types don't carry a balance, so we skip the "Start + Earned - Used = End" check
+    EXEMPT_LEAVE = ["Admin", "Change of Station Leave", "Time Off Award"] 
+
     for _, row in leave.iterrows():
+        # Skip if it's in our exempt list
+        if row['type'] in EXEMPT_LEAVE:
+            continue
+
         s, e, u, end = row['balance_start'] or 0, row['earned_current'] or 0, row['used_current'] or 0, row['balance_end'] or 0
+        
+        # Check math for standard leave types
         if abs((s + e - u) - end) > 0.01:
             flags[f"leave_{row['type']}_end"] = f"Math: {s}+{e}-{u} should be {s+e-u:.2f}"
 
