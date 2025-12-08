@@ -563,11 +563,29 @@ with tab_audit:
                 st.rerun()
 
         # 5. Calculate Expected Data
-        # Get Base Rate from the Actual data to seed the calculator
         base_rate = 0.0
+        
+        # A. Try to get rate from CURRENT stub
         reg_rows = actual_data['earnings'][actual_data['earnings']['type'].str.contains('Regular', case=False, na=False)]
         if not reg_rows.empty:
             base_rate = reg_rows.iloc[0]['rate']
+            
+        # B. FAILSAFE: If rate is missing/zero (e.g., Shutdown or $0.00 check), find last known good rate
+        if base_rate == 0.0:
+            conn = get_db()
+            # Find the most recent 'Regular' entry with a positive rate
+            last_known = pd.read_sql("""
+                SELECT rate FROM earnings 
+                WHERE type LIKE '%Regular%' AND rate > 0 
+                ORDER BY id DESC LIMIT 1
+            """, conn)
+            conn.close()
+            
+            if not last_known.empty:
+                base_rate = last_known.iloc[0]['rate']
+                st.info(f"ℹ️ Current stub has no rate (Shutdown?). Using last known rate: ${base_rate:.2f}/hr")
+            else:
+                st.error("⚠️ Could not find ANY historical pay rate in the database. Please ingest at least one valid paycheck.")
 
         expected_data = calculate_expected_pay(edited_df, base_rate, actual_data['stub'])
 
