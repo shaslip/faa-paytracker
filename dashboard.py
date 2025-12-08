@@ -121,16 +121,41 @@ def run_full_audit(stub_id):
     # These types don't carry a balance, so we skip the "Start + Earned - Used = End" check
     EXEMPT_LEAVE = ["Admin", "Change of Station Leave", "Time Off Award"] 
 
+    def to_minutes(val):
+        """Converts 6.45 (6h 45m) into 405 minutes."""
+        if val is None: return 0
+        hours = int(val)
+        minutes = round((val - hours) * 100) # .45 -> 45
+        return (hours * 60) + minutes
+
+    def to_dot_format(total_minutes):
+        """Converts 405 minutes back to 6.45."""
+        h = total_minutes // 60
+        m = total_minutes % 60
+        return h + (m / 100.0)
+
     for _, row in leave.iterrows():
-        # Skip if it's in our exempt list
         if row['type'] in EXEMPT_LEAVE:
             continue
 
-        s, e, u, end = row['balance_start'] or 0, row['earned_current'] or 0, row['used_current'] or 0, row['balance_end'] or 0
+        # Convert everything to raw minutes for safe math
+        s_min = to_minutes(row['balance_start'])
+        e_min = to_minutes(row['earned_current'])
+        u_min = to_minutes(row['used_current'])
+        end_actual_min = to_minutes(row['balance_end'])
         
-        # Check math for standard leave types
-        if abs((s + e - u) - end) > 0.01:
-            flags[f"leave_{row['type']}_end"] = f"Math: {s}+{e}-{u} should be {s+e-u:.2f}"
+        # Do the math
+        calc_end_min = s_min + e_min - u_min
+        
+        # Check variance (1 minute tolerance)
+        if abs(calc_end_min - end_actual_min) > 1:
+            
+            # Format nicely for the error message
+            calc_h, calc_m = divmod(calc_end_min, 60)
+            act_h, act_m = divmod(end_actual_min, 60)
+            
+            key = f"leave_{row['type']}_end"
+            flags[key] = f"Math Error: {s_min//60}:{s_min%60:02d} + {e_min//60}:{e_min%60:02d} - {u_min//60}:{u_min%60:02d} should be {calc_h}:{calc_m:02d}, but stub says {act_h}:{act_m:02d}"
 
     # 2. Gross Math
     calc_gross = earnings['amount_current'].sum() + earnings['amount_adjusted'].sum()
