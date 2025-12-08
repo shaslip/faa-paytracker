@@ -181,10 +181,9 @@ def save_timesheet(period_ending, df):
     conn.commit()
     conn.close()
 
-def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta, ref_deductions):
+def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta, ref_deductions, actual_leave):
     """
-    Calculates Gross based on manual inputs, then applies reference deductions 
-    to estimate Net Pay.
+    Calculates Gross, estimates Net, and fixes Leave math using actual Start/Earned values.
     """
     total_reg = timesheet_df['Regular'].sum()
     total_ot = timesheet_df['Overtime'].sum()
@@ -192,7 +191,7 @@ def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta, ref_deduct
     total_sun = timesheet_df['Sunday'].sum()
     total_hol = timesheet_df['Holiday'].sum()
 
-    # --- 1. GROSS CALCULATION ---
+    # --- 1. GROSS ---
     amt_reg = round(total_reg * base_rate, 2)
 
     if total_ot > 0:
@@ -209,17 +208,14 @@ def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta, ref_deduct
 
     gross_pay = amt_reg + amt_true_ot + amt_flsa + amt_night + amt_sun + amt_hol
 
-    # --- 2. DEDUCTIONS & NET PAY ---
-    # We use the reference deductions (from the last good check)
-    # Note: We are cloning the amounts exactly. We are not re-calculating taxes 
-    # based on the new gross, as that requires complex tax bracket logic.
+    # --- 2. DEDUCTIONS ---
     total_deductions = 0.0
     if not ref_deductions.empty:
         total_deductions = ref_deductions['amount_current'].sum()
     
     net_pay = gross_pay - total_deductions
 
-    # --- 3. BUILD EARNINGS ROWS ---
+    # --- 3. EARNINGS ROWS ---
     earnings_rows = []
     if total_reg > 0: 
         earnings_rows.append(["Regular", base_rate, total_reg, amt_reg])
@@ -238,6 +234,33 @@ def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta, ref_deduct
     earnings_df['hours_adjusted'] = 0.0 
     earnings_df['amount_adjusted'] = 0.0 
 
+    # --- 4. LEAVE CALCULATOR ---
+    # We want Annual, Sick, and Credit. 
+    # Logic: Start (Actual) + Earned (Actual) - Used (0 for now) = End (Calculated)
+    leave_rows = []
+    target_leaves = ['Annual', 'Sick', 'Credit']
+    
+    if not actual_leave.empty:
+        for _, row in actual_leave.iterrows():
+            # Check if this row is one of the types we care about
+            if any(t in row['type'] for t in target_leaves):
+                start = row['balance_start']
+                earned = row['earned_current']
+                used = 0.0 # Placeholder: We don't have 'Used' in the timesheet grid yet
+                
+                # THE FIX: We force the math here
+                end_calculated = start + earned - used
+                
+                leave_rows.append({
+                    'type': row['type'],
+                    'balance_start': start,
+                    'earned_current': earned,
+                    'used_current': used,
+                    'balance_end': end_calculated
+                })
+    
+    leave_df = pd.DataFrame(leave_rows)
+
     stub = {
         'agency': actual_stub_meta['agency'],
         'period_ending': actual_stub_meta['period_ending'],
@@ -245,11 +268,11 @@ def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta, ref_deduct
         'gross_pay': gross_pay,
         'total_deductions': total_deductions, 
         'net_pay': net_pay, 
-        'remarks': "GENERATED FROM USER TIMESHEET\n(Deductions copied from reference check)",
+        'remarks': "GENERATED FROM USER TIMESHEET\n(Leave End Balances corrected mathematically)",
         'file_source': 'GENERATED'
     }
 
-    return {'stub': stub, 'earnings': earnings_df, 'deductions': ref_deductions, 'leave': pd.DataFrame()}
+    return {'stub': stub, 'earnings': earnings_df, 'deductions': ref_deductions, 'leave': leave_df}
 
 # --- Helper: Get Latest Baseline (Restored) ---
 def get_latest_baseline():
@@ -632,14 +655,19 @@ with tab_audit:
                 st.rerun()
 
         # 5. Calculate Expected Data
-        # Retrieve Rate and Deductions (Handles Shutdowns automatically)
         ref_rate, ref_deductions = get_reference_data(selected_id)
         
         if ref_rate == 0.0:
-             st.error("⚠️ Could not find ANY historical pay rate in the database. Please ingest at least one valid paycheck.")
+             st.error("⚠️ Could not find ANY historical pay rate in the database.")
         
-        # Pass the deductions into the calculator
-        expected_data = calculate_expected_pay(edited_df, ref_rate, actual_data['stub'], ref_deductions)
+        # Pass actual_data['leave'] so we can grab the Start/Earned figures
+        expected_data = calculate_expected_pay(
+            edited_df, 
+            ref_rate, 
+            actual_data['stub'], 
+            ref_deductions, 
+            actual_data['leave']
+        )
 
         # 6. RENDER SIDE-BY-SIDE
         if flags:
