@@ -399,7 +399,7 @@ with tab_audit:
             tag = " [SHADOW]" if r['file_source'] == 'SHADOW' else ""
             
             # UPDATED: Changed label to "For pay period ending [Date]"
-            return f"{icon}{tag} For pay period ending {r['period_ending']} (Net: ${r['net_pay']:,.2f})"
+            return f"{icon}{tag} {r['period_ending']} (Net: ${r['net_pay']:,.2f})"
 
         # 3. The Menu
         selected_id = st.selectbox(
