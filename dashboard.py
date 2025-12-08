@@ -380,12 +380,12 @@ with tab_audit:
     st.header("Deep Dive Audit")
     
     conn = get_db()
-    stubs = pd.read_sql("SELECT id, pay_date, net_pay, file_source FROM paystubs ORDER BY pay_date DESC", conn)
+    # UPDATED: Added 'period_ending' to the SELECT statement
+    stubs = pd.read_sql("SELECT id, pay_date, period_ending, net_pay, file_source FROM paystubs ORDER BY pay_date DESC", conn)
     conn.close()
     
     if not stubs.empty:
         # 1. Pre-calculate status for all stubs (Cached)
-        # This lets us put the Red/Green icon in the menu
         status_map = get_audit_status_map(stubs['id'].tolist())
 
         # 2. Custom Formatting for Dropdown
@@ -398,7 +398,8 @@ with tab_audit:
             # Shadow tag
             tag = " [SHADOW]" if r['file_source'] == 'SHADOW' else ""
             
-            return f"{icon}{tag} {r['pay_date']} (Net: ${r['net_pay']:,.2f})"
+            # UPDATED: Changed label to "For pay period ending [Date]"
+            return f"{icon}{tag} For pay period ending {r['period_ending']} (Net: ${r['net_pay']:,.2f})"
 
         # 3. The Menu
         selected_id = st.selectbox(
