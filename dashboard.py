@@ -148,26 +148,52 @@ def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta):
     total_sun = timesheet_df['Sunday'].sum()
     total_hol = timesheet_df['Holiday'].sum()
 
-    # Rate Logic
-    amt_reg = total_reg * base_rate
-    amt_ot = total_ot * (base_rate * 1.5)
-    amt_night = total_night * (base_rate * 0.10)
-    amt_sun = total_sun * (base_rate * 0.25)
-    amt_hol = total_hol * base_rate 
+    # --- 1. REGULAR ---
+    amt_reg = round(total_reg * base_rate, 2)
 
-    gross_pay = amt_reg + amt_ot + amt_night + amt_sun + amt_hol
+    # --- 2. OVERTIME SPLIT (True OT + FLSA) ---
+    if total_ot > 0:
+        # A. True Overtime (The Straight Time Portion: 1.0x)
+        amt_true_ot = round(total_ot * base_rate, 2)
+        
+        # B. FLSA Premium (The Half Time Portion: 0.5x)
+        # CRITICAL: Agency rounds the half-rate to the penny BEFORE multiplying
+        flsa_rate_calc = round(base_rate * 0.5, 2)
+        amt_flsa = round(total_ot * flsa_rate_calc, 2)
+    else:
+        amt_true_ot = 0.0
+        amt_flsa = 0.0
 
+    # --- 3. DIFFERENTIALS ---
+    amt_night = round(total_night * (base_rate * 0.10), 2)
+    amt_sun = round(total_sun * (base_rate * 0.25), 2)
+    amt_hol = round(total_hol * base_rate, 2)
+
+    gross_pay = amt_reg + amt_true_ot + amt_flsa + amt_night + amt_sun + amt_hol
+
+    # --- 4. BUILD ROWS ---
     earnings_rows = []
-    if total_reg > 0: earnings_rows.append(["Regular Base", base_rate, total_reg, amt_reg])
-    if total_ot > 0: earnings_rows.append(["Overtime", base_rate * 1.5, total_ot, amt_ot])
-    if total_night > 0: earnings_rows.append(["Night Differential", base_rate * 0.10, total_night, amt_night])
-    if total_sun > 0: earnings_rows.append(["Sunday Premium", base_rate * 0.25, total_sun, amt_sun])
-    if total_hol > 0: earnings_rows.append(["Holiday Worked", base_rate, total_hol, amt_hol])
+    
+    if total_reg > 0: 
+        earnings_rows.append(["Regular", base_rate, total_reg, amt_reg])
+        
+    if total_ot > 0:
+        # Row 1: FLSA Premium (Rate displayed as 0.0 to match paystub)
+        earnings_rows.append(["FLSA Premium", 0.0, total_ot, amt_flsa])
+        # Row 2: True Overtime
+        earnings_rows.append(["True Overtime", base_rate, total_ot, amt_true_ot])
+        
+    if total_night > 0: 
+        earnings_rows.append(["Night Differential", base_rate * 0.10, total_night, amt_night])
+    if total_sun > 0: 
+        earnings_rows.append(["Sunday Premium", base_rate * 0.25, total_sun, amt_sun])
+    if total_hol > 0: 
+        earnings_rows.append(["Holiday Worked", base_rate, total_hol, amt_hol])
 
     earnings_df = pd.DataFrame(earnings_rows, columns=['type', 'rate', 'hours_current', 'amount_current'])
     earnings_df['amount_ytd'] = 0.0 
-    earnings_df['hours_adjusted'] = 0.0 # Required by your existing renderer
-    earnings_df['amount_adjusted'] = 0.0 # Required by your existing renderer
+    earnings_df['hours_adjusted'] = 0.0 
+    earnings_df['amount_adjusted'] = 0.0 
 
     stub = {
         'agency': actual_stub_meta['agency'],
@@ -175,7 +201,7 @@ def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta):
         'pay_date': actual_stub_meta['pay_date'],
         'gross_pay': gross_pay,
         'total_deductions': 0.0, 
-        'net_pay': gross_pay, # Showing Gross as Net for the estimate since we don't calculate tax yet
+        'net_pay': gross_pay, 
         'remarks': "GENERATED FROM USER TIMESHEET\n(Net Pay shown is Gross - 0 deductions)",
         'file_source': 'GENERATED'
     }
