@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import os
+from datetime import datetime, timedelta
 
 # --- Configuration ---
 DB_NAME = 'payroll_audit.db'
@@ -51,6 +52,135 @@ def get_db():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     return conn
+
+# --- TIMESHEET & CALCULATOR HELPERS ---
+
+def get_pay_period_dates(period_ending_str):
+    """Generates the 14 dates for a given period ending string."""
+    end_date = datetime.strptime(period_ending_str, "%Y-%m-%d")
+    dates = []
+    # 13 days ago to today (total 14 days)
+    start_date = end_date - timedelta(days=13)
+    for i in range(14):
+        d = start_date + timedelta(days=i)
+        dates.append(d.strftime("%Y-%m-%d"))
+    return dates
+
+def load_timesheet(period_ending):
+    """Loads existing timesheet data or creates a blank DataFrame."""
+    conn = get_db()
+    # Ensure table exists (handling migration simply here)
+    conn.execute('''CREATE TABLE IF NOT EXISTS timesheet_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        period_ending TEXT,
+        day_date TEXT,
+        day_index INTEGER, 
+        reg_hours REAL DEFAULT 0,
+        ot_hours REAL DEFAULT 0,
+        night_hours REAL DEFAULT 0,
+        sunday_hours REAL DEFAULT 0,
+        holiday_hours REAL DEFAULT 0,
+        note TEXT,
+        UNIQUE(period_ending, day_date)
+    )''')
+    
+    existing = pd.read_sql("SELECT * FROM timesheet_entries WHERE period_ending = ? ORDER BY day_index ASC", 
+                           conn, params=(period_ending,))
+    conn.close()
+
+    dates = get_pay_period_dates(period_ending)
+    
+    data = []
+    for i, d in enumerate(dates):
+        row = existing[existing['day_date'] == d] if not existing.empty else pd.DataFrame()
+        if not row.empty:
+            data.append({
+                "Date": d,
+                "Regular": row.iloc[0]['reg_hours'],
+                "Overtime": row.iloc[0]['ot_hours'],
+                "Night": row.iloc[0]['night_hours'],
+                "Sunday": row.iloc[0]['sunday_hours'],
+                "Holiday": row.iloc[0]['holiday_hours'],
+                "Note": row.iloc[0]['note']
+            })
+        else:
+            # Default: Workdays get 8, weekends 0
+            weekday = datetime.strptime(d, "%Y-%m-%d").weekday() 
+            is_weekend = weekday >= 5
+            data.append({
+                "Date": d,
+                "Regular": 0.0 if is_weekend else 8.0,
+                "Overtime": 0.0,
+                "Night": 0.0,
+                "Sunday": 0.0,
+                "Holiday": 0.0,
+                "Note": ""
+            })
+            
+    return pd.DataFrame(data)
+
+def save_timesheet(period_ending, df):
+    conn = get_db()
+    c = conn.cursor()
+    for i, row in df.iterrows():
+        c.execute("""
+            INSERT INTO timesheet_entries (period_ending, day_date, day_index, reg_hours, ot_hours, night_hours, sunday_hours, holiday_hours, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(period_ending, day_date) DO UPDATE SET
+            reg_hours=excluded.reg_hours,
+            ot_hours=excluded.ot_hours,
+            night_hours=excluded.night_hours,
+            sunday_hours=excluded.sunday_hours,
+            holiday_hours=excluded.holiday_hours,
+            note=excluded.note
+        """, (period_ending, row['Date'], i, row['Regular'], row['Overtime'], row['Night'], row['Sunday'], row['Holiday'], row['Note']))
+    conn.commit()
+    conn.close()
+
+def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta):
+    """
+    Takes the timesheet and the base rate, returns a dict structure 
+    identical to what 'run_full_audit' returns, but calculated from scratch.
+    """
+    total_reg = timesheet_df['Regular'].sum()
+    total_ot = timesheet_df['Overtime'].sum()
+    total_night = timesheet_df['Night'].sum()
+    total_sun = timesheet_df['Sunday'].sum()
+    total_hol = timesheet_df['Holiday'].sum()
+
+    # Rate Logic
+    amt_reg = total_reg * base_rate
+    amt_ot = total_ot * (base_rate * 1.5)
+    amt_night = total_night * (base_rate * 0.10)
+    amt_sun = total_sun * (base_rate * 0.25)
+    amt_hol = total_hol * base_rate 
+
+    gross_pay = amt_reg + amt_ot + amt_night + amt_sun + amt_hol
+
+    earnings_rows = []
+    if total_reg > 0: earnings_rows.append(["Regular Base", base_rate, total_reg, amt_reg])
+    if total_ot > 0: earnings_rows.append(["Overtime", base_rate * 1.5, total_ot, amt_ot])
+    if total_night > 0: earnings_rows.append(["Night Differential", base_rate * 0.10, total_night, amt_night])
+    if total_sun > 0: earnings_rows.append(["Sunday Premium", base_rate * 0.25, total_sun, amt_sun])
+    if total_hol > 0: earnings_rows.append(["Holiday Worked", base_rate, total_hol, amt_hol])
+
+    earnings_df = pd.DataFrame(earnings_rows, columns=['type', 'rate', 'hours_current', 'amount_current'])
+    earnings_df['amount_ytd'] = 0.0 
+    earnings_df['hours_adjusted'] = 0.0 # Required by your existing renderer
+    earnings_df['amount_adjusted'] = 0.0 # Required by your existing renderer
+
+    stub = {
+        'agency': actual_stub_meta['agency'],
+        'period_ending': actual_stub_meta['period_ending'],
+        'pay_date': actual_stub_meta['pay_date'],
+        'gross_pay': gross_pay,
+        'total_deductions': 0.0, 
+        'net_pay': gross_pay, # Showing Gross as Net for the estimate since we don't calculate tax yet
+        'remarks': "GENERATED FROM USER TIMESHEET\n(Net Pay shown is Gross - 0 deductions)",
+        'file_source': 'GENERATED'
+    }
+
+    return {'stub': stub, 'earnings': earnings_df, 'deductions': pd.DataFrame(), 'leave': pd.DataFrame()}
 
 # --- Helper: Get Latest Baseline (Restored) ---
 def get_latest_baseline():
@@ -377,47 +507,90 @@ with tab_proj:
 
 # --- TAB: AUDIT & VIEW ---
 with tab_audit:
+    # Inject Grid CSS specifically for this tab
+    st.markdown("""
+    <style>
+        .comparison-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .comp-col h3 { text-align: center; padding: 10px; color: white; border-radius: 5px; }
+        .comp-expected { border-top: 5px solid #2e86c1; }
+        .comp-actual { border-top: 5px solid #27ae60; }
+    </style>
+    """, unsafe_allow_html=True)
+
     st.header("Deep Dive Audit")
     
     conn = get_db()
-    # UPDATED: Added 'period_ending' to the SELECT statement
+    # Added period_ending to this query
     stubs = pd.read_sql("SELECT id, pay_date, period_ending, net_pay, file_source FROM paystubs ORDER BY pay_date DESC", conn)
     conn.close()
     
     if not stubs.empty:
-        # 1. Pre-calculate status for all stubs (Cached)
+        # 1. Pre-calculate status (Keep your existing function call)
         status_map = get_audit_status_map(stubs['id'].tolist())
 
-        # 2. Custom Formatting for Dropdown
+        # 2. Dropdown
         def fmt(row_id):
             r = stubs[stubs['id'] == row_id].iloc[0]
-            
-            # Icon based on audit result
             icon = status_map.get(row_id, "❓")
-            
-            # Shadow tag
-            tag = " [SHADOW]" if r['file_source'] == 'SHADOW' else ""
-            
-            # UPDATED: Changed label to "For pay period ending [Date]"
-            return f"{icon}{tag} {r['period_ending']} (Net: ${r['net_pay']:,.2f})"
+            return f"{icon} {r['period_ending']} (Net: ${r['net_pay']:,.2f})"
 
-        # 3. The Menu
-        selected_id = st.selectbox(
-            "Select Pay Period (🔴=Error, ✅=Clean):", 
-            options=stubs['id'].tolist(), 
-            format_func=fmt
-        )
+        selected_id = st.selectbox("Select Pay Period:", stubs['id'].tolist(), format_func=fmt)
         
-        # 4. Run Full Logic for Display
-        data, flags = run_full_audit(selected_id)
-        
+        # 3. Load Actual Data
+        actual_data, flags = run_full_audit(selected_id)
+        current_period_ending = actual_data['stub']['period_ending']
+
+        # 4. TIMESHEET INPUT SECTION
+        with st.expander("📝 Variance Analysis (Edit Timesheet)", expanded=True):
+            ts_df = load_timesheet(current_period_ending)
+            
+            edited_df = st.data_editor(
+                ts_df, 
+                num_rows="fixed", 
+                hide_index=True,
+                column_config={
+                    "Date": st.column_config.TextColumn(disabled=True),
+                    "Regular": st.column_config.NumberColumn(format="%.1f"),
+                    "Overtime": st.column_config.NumberColumn(format="%.1f"),
+                    "Night": st.column_config.NumberColumn(format="%.1f"),
+                    "Sunday": st.column_config.NumberColumn(format="%.1f"),
+                    "Holiday": st.column_config.NumberColumn(format="%.1f"),
+                }
+            )
+            
+            if st.button("💾 Save Inputs & Recalculate"):
+                save_timesheet(current_period_ending, edited_df)
+                st.rerun()
+
+        # 5. Calculate Expected Data
+        # Get Base Rate from the Actual data to seed the calculator
+        base_rate = 0.0
+        reg_rows = actual_data['earnings'][actual_data['earnings']['type'].str.contains('Regular', case=False, na=False)]
+        if not reg_rows.empty:
+            base_rate = reg_rows.iloc[0]['rate']
+
+        expected_data = calculate_expected_pay(edited_df, base_rate, actual_data['stub'])
+
+        # 6. RENDER SIDE-BY-SIDE
         if flags:
-            st.error(f"⚠️ Found {len(flags)} Anomalies! Scroll down to see red items.")
+            st.error(f"⚠️ Found {len(flags)} Anomalies in the Actual Paystub! See Red text below.")
         else:
-            st.success("✅ All Math Checks Passed.")
+            st.success("✅ Math Checks Passed on Actual Stub.")
 
-        html_view = render_paystub(data, flags)
-        st.markdown(html_view, unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown('<div class="comp-col comp-expected"><h3 style="background-color: #2e86c1;">🟦 Your Calculation</h3></div>', unsafe_allow_html=True)
+            # We reuse your existing render_paystub function
+            html_expected = render_paystub(expected_data, {}) 
+            st.markdown(html_expected, unsafe_allow_html=True)
+
+        with col2:
+            st.markdown('<div class="comp-col comp-actual"><h3 style="background-color: #27ae60;">🟩 Official Paystub</h3></div>', unsafe_allow_html=True)
+            # We reuse your existing render_paystub function
+            html_actual = render_paystub(actual_data, flags)
+            st.markdown(html_actual, unsafe_allow_html=True)
+
     else:
         st.warning("No paystubs found. Go to 'Ingestion' tab.")
 
