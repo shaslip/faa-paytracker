@@ -31,6 +31,21 @@ def local_css(file_name):
 
 local_css(CSS_FILE)
 
+# --- Dropdown menu helper ---
+@st.cache_data
+def get_audit_status_map(stub_ids):
+    """
+    Runs a quick audit on ALL stubs to generate status icons for the dropdown.
+    Cached so it doesn't slow down the app.
+    """
+    status_map = {}
+    for sid in stub_ids:
+        # We only care about the 'flags' (errors), discard the data
+        _, flags = run_full_audit(sid)
+        # 🔴 = Error, ✅ = Clean, ⚠️ = Warning (if you implemented warnings)
+        status_map[sid] = "🔴" if flags else "✅"
+    return status_map
+    
 # --- Database Helper ---
 def get_db():
     conn = sqlite3.connect(DB_NAME)
@@ -329,19 +344,38 @@ with tab_proj:
 # --- TAB: AUDIT & VIEW ---
 with tab_audit:
     st.header("Deep Dive Audit")
+    
     conn = get_db()
     stubs = pd.read_sql("SELECT id, pay_date, net_pay, file_source FROM paystubs ORDER BY pay_date DESC", conn)
     conn.close()
-
+    
     if not stubs.empty:
+        # 1. Pre-calculate status for all stubs (Cached)
+        # This lets us put the Red/Green icon in the menu
+        status_map = get_audit_status_map(stubs['id'].tolist())
+
+        # 2. Custom Formatting for Dropdown
         def fmt(row_id):
             r = stubs[stubs['id'] == row_id].iloc[0]
-            tag = "[SHADOW]" if r['file_source'] == 'SHADOW' else ""
-            return f"{tag} {r['pay_date']} (Net: ${r['net_pay']:,.2f})"
+            
+            # Icon based on audit result
+            icon = status_map.get(row_id, "❓")
+            
+            # Shadow tag
+            tag = " [SHADOW]" if r['file_source'] == 'SHADOW' else ""
+            
+            return f"{icon}{tag} {r['pay_date']} (Net: ${r['net_pay']:,.2f})"
 
-        selected_id = st.selectbox("Select Pay Period:", options=stubs['id'].tolist(), format_func=fmt)
+        # 3. The Menu
+        selected_id = st.selectbox(
+            "Select Pay Period (🔴=Error, ✅=Clean):", 
+            options=stubs['id'].tolist(), 
+            format_func=fmt
+        )
+        
+        # 4. Run Full Logic for Display
         data, flags = run_full_audit(selected_id)
-
+        
         if flags:
             st.error(f"⚠️ Found {len(flags)} Anomalies! Scroll down to see red items.")
         else:
