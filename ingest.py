@@ -114,14 +114,6 @@ def parse_html_paystub(html_content, filename, conn):
 
         print(f"Importing {filename}: {pay_date} (Net: ${net_pay})")
 
-        # Insert Master Record (Updated Query)
-        c.execute('''INSERT INTO paystubs 
-                     (pay_date, period_ending, net_pay, gross_pay, total_deductions, agency, remarks, file_source)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                  (pay_date, period_ending, net_pay, gross_pay, total_deducs, agency, remarks, filename))
-
-        print(f"Importing {filename}: {pay_date} (Net: ${net_pay})")
-
         # Insert Master Record
         c.execute('''INSERT INTO paystubs
                      (pay_date, period_ending, net_pay, gross_pay, total_deductions, agency, file_source)
