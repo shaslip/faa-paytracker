@@ -110,6 +110,10 @@ def parse_html_paystub(html_content, filename, conn):
         # --- NEW: Extract Remarks ---
         remarks_node = soup.find(id="lblRemarks")
         # Get text, strip whitespace, and preserve line breaks if possible
+        if remarks_node:
+            print(f"DEBUG: Found Node for {pay_date}. Content: {remarks_node.get_text()[:20]}...")
+        else:
+            print(f"DEBUG: Node 'lblRemarks' NOT FOUND for {pay_date}")
         remarks = remarks_node.get_text("\n").strip() if remarks_node else ""
 
         print(f"Importing {filename}: {pay_date} (Net: ${net_pay})")
