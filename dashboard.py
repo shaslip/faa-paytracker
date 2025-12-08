@@ -119,7 +119,7 @@ def run_full_audit(stub_id):
 
     # 1. Leave Math
     # These types don't carry a balance, so we skip the "Start + Earned - Used = End" check
-    EXEMPT_LEAVE = ["Admin", "Change of Station Leave", "Time Off Award"] 
+    EXEMPT_LEAVE = ["Admin", "Change of Station Leave", "Time Off Award", "Gov Shutdown-Excepted"] 
 
     def to_minutes(val):
         """Converts 6.45 (6h 45m) into 405 minutes."""
