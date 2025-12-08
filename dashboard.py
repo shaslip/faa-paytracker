@@ -56,9 +56,7 @@ def get_db():
 # --- TIMESHEET & CALCULATOR HELPERS ---
 def get_reference_data(current_stub_id):
     """
-    Smartly fetches the base_rate and deductions.
-    If the current stub is a Shutdown ($0.00) or Missing, 
-    it hunts for the last known good paycheck.
+    Returns base_rate, deductions, AND earnings from the best available source.
     """
     conn = get_db()
     
@@ -75,10 +73,9 @@ def get_reference_data(current_stub_id):
     # 3. IF VALID: Return current data
     if base_rate > 0:
         conn.close()
-        return base_rate, curr_deductions
+        return base_rate, curr_deductions, curr_earnings
     
     # 4. IF INVALID (Shutdown/Error): Search History
-    # Find last stub with valid Regular earnings
     last_good = pd.read_sql("""
         SELECT paystub_id, rate FROM earnings 
         WHERE type LIKE '%Regular%' AND rate > 0 
@@ -89,15 +86,14 @@ def get_reference_data(current_stub_id):
         ref_id = int(last_good.iloc[0]['paystub_id'])
         ref_rate = last_good.iloc[0]['rate']
         
-        # Pull deductions from THAT valid paystub
         ref_deductions = pd.read_sql("SELECT * FROM deductions WHERE paystub_id = ?", conn, params=(ref_id,))
+        ref_earnings = pd.read_sql("SELECT * FROM earnings WHERE paystub_id = ?", conn, params=(ref_id,))
         conn.close()
         
-        # Return historical data
-        return ref_rate, ref_deductions
+        return ref_rate, ref_deductions, ref_earnings
 
     conn.close()
-    return 0.0, pd.DataFrame() # Fallback if database is empty
+    return 0.0, pd.DataFrame(), pd.DataFrame()
 
 def get_pay_period_dates(period_ending_str):
     """Generates the 14 dates for a given period ending string."""
@@ -181,51 +177,100 @@ def save_timesheet(period_ending, df):
     conn.commit()
     conn.close()
 
-def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta, ref_deductions, actual_leave):
-    """
-    Calculates Gross, estimates Net, and fixes Leave math using actual Start/Earned values.
-    """
+def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta, ref_deductions, actual_leave, ref_earnings):
     total_reg = timesheet_df['Regular'].sum()
     total_ot = timesheet_df['Overtime'].sum()
     total_night = timesheet_df['Night'].sum()
     total_sun = timesheet_df['Sunday'].sum()
     total_hol = timesheet_df['Holiday'].sum()
 
-    # --- 1. GROSS ---
+    # --- 1. BASE PAY ---
     amt_reg = round(total_reg * base_rate, 2)
 
-    if total_ot > 0:
-        amt_true_ot = round(total_ot * base_rate, 2)
-        flsa_rate_calc = round(base_rate * 0.5, 2)
-        amt_flsa = round(total_ot * flsa_rate_calc, 2)
-    else:
-        amt_true_ot = 0.0
-        amt_flsa = 0.0
+    # --- 2. DIFFERENTIALS (Night/Sun) ---
+    rate_night = round(base_rate * 0.10, 2)
+    amt_night = round(total_night * rate_night, 2)
 
-    amt_night = round(total_night * (base_rate * 0.10), 2)
-    amt_sun = round(total_sun * (base_rate * 0.25), 2)
+    rate_sun = round(base_rate * 0.25, 2)
+    amt_sun = round(total_sun * rate_sun, 2)
+    
     amt_hol = round(total_hol * base_rate, 2)
 
-    gross_pay = amt_reg + amt_true_ot + amt_flsa + amt_night + amt_sun + amt_hol
+    # --- 3. CONTROLLER INCENTIVE PAY (CIP) ---
+    # Logic: Find historic CIP %, apply to current Base
+    amt_cip = 0.0
+    rate_cip = 0.0
+    
+    if not ref_earnings.empty:
+        cip_row = ref_earnings[ref_earnings['type'].str.contains('Controller Incentive', case=False)]
+        reg_row = ref_earnings[ref_earnings['type'].str.contains('Regular', case=False)]
+        
+        if not cip_row.empty and not reg_row.empty:
+            hist_cip_amt = cip_row.iloc[0]['amount_current']
+            hist_reg_amt = reg_row.iloc[0]['amount_current']
+            
+            if hist_reg_amt > 0:
+                # Calculate the percentage (e.g., 0.10 for 10%)
+                cip_factor = hist_cip_amt / hist_reg_amt
+                
+                # Apply to current Projected Base
+                amt_cip = round(amt_reg * cip_factor, 2)
+                rate_cip = round(base_rate * cip_factor, 2) # Est. hourly impact
 
-    # --- 2. DEDUCTIONS ---
+    # --- 4. FLSA CALCULATION (The Complex Part) ---
+    amt_true_ot = 0.0
+    amt_flsa = 0.0
+    rate_flsa = 0.0
+
+    if total_ot > 0:
+        # A. True Overtime (Straight Time)
+        amt_true_ot = round(total_ot * base_rate, 2)
+
+        # B. FLSA Premium (Half of "Regular Rate")
+        # Total Remuneration includes Base + Night + Sunday + CIP
+        total_remuneration = amt_reg + amt_night + amt_sun + amt_cip
+        
+        # Total Hours includes Regular + Overtime
+        total_hours = total_reg + total_ot
+        
+        if total_hours > 0:
+            # The blended "Regular Rate"
+            regular_rate = total_remuneration / total_hours
+            
+            # FLSA Premium is 50% of that blended rate
+            rate_flsa = round(regular_rate * 0.5, 2)
+            amt_flsa = round(total_ot * rate_flsa, 2)
+
+    gross_pay = amt_reg + amt_true_ot + amt_flsa + amt_night + amt_sun + amt_hol + amt_cip
+
+    # --- 5. DEDUCTIONS ---
     total_deductions = 0.0
     if not ref_deductions.empty:
         total_deductions = ref_deductions['amount_current'].sum()
     
     net_pay = gross_pay - total_deductions
 
-    # --- 3. EARNINGS ROWS ---
+    # --- 6. BUILD ROWS ---
     earnings_rows = []
+    
+    # Regular
     if total_reg > 0: 
         earnings_rows.append(["Regular", base_rate, total_reg, amt_reg])
+        
+    # CIP (Insert after Regular)
+    if amt_cip > 0:
+        earnings_rows.append(["Controller Incentive Pay", rate_cip, total_reg, amt_cip])
+        
+    # Overtime
     if total_ot > 0:
-        earnings_rows.append(["FLSA Premium", 0.0, total_ot, amt_flsa])
+        earnings_rows.append(["FLSA Premium", rate_flsa, total_ot, amt_flsa])
         earnings_rows.append(["True Overtime", base_rate, total_ot, amt_true_ot])
+        
+    # Diffs
     if total_night > 0: 
-        earnings_rows.append(["Night Differential", base_rate * 0.10, total_night, amt_night])
+        earnings_rows.append(["Night Differential", rate_night, total_night, amt_night])
     if total_sun > 0: 
-        earnings_rows.append(["Sunday Premium", base_rate * 0.25, total_sun, amt_sun])
+        earnings_rows.append(["Sunday Premium", rate_sun, total_sun, amt_sun])
     if total_hol > 0: 
         earnings_rows.append(["Holiday Worked", base_rate, total_hol, amt_hol])
 
@@ -234,29 +279,21 @@ def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta, ref_deduct
     earnings_df['hours_adjusted'] = 0.0 
     earnings_df['amount_adjusted'] = 0.0 
 
-    # --- 4. LEAVE CALCULATOR ---
-    # We want Annual, Sick, and Credit. 
-    # Logic: Start (Actual) + Earned (Actual) - Used (0 for now) = End (Calculated)
+    # --- 7. LEAVE LOGIC (Preserved) ---
     leave_rows = []
     target_leaves = ['Annual', 'Sick', 'Credit']
-    
     if not actual_leave.empty:
         for _, row in actual_leave.iterrows():
-            # Check if this row is one of the types we care about
             if any(t in row['type'] for t in target_leaves):
                 start = row['balance_start']
                 earned = row['earned_current']
-                used = 0.0 # Placeholder: We don't have 'Used' in the timesheet grid yet
-                
-                # THE FIX: We force the math here
-                end_calculated = start + earned - used
-                
+                used = 0.0 
                 leave_rows.append({
                     'type': row['type'],
                     'balance_start': start,
                     'earned_current': earned,
                     'used_current': used,
-                    'balance_end': end_calculated
+                    'balance_end': start + earned - used
                 })
     
     leave_df = pd.DataFrame(leave_rows)
@@ -268,7 +305,7 @@ def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta, ref_deduct
         'gross_pay': gross_pay,
         'total_deductions': total_deductions, 
         'net_pay': net_pay, 
-        'remarks': "GENERATED FROM USER TIMESHEET\n(Leave End Balances corrected mathematically)",
+        'remarks': "GENERATED FROM USER TIMESHEET\n(FLSA includes Diffs/CIP)",
         'file_source': 'GENERATED'
     }
 
@@ -655,18 +692,18 @@ with tab_audit:
                 st.rerun()
 
         # 5. Calculate Expected Data
-        ref_rate, ref_deductions = get_reference_data(selected_id)
+        ref_rate, ref_deductions, ref_earnings = get_reference_data(selected_id)
         
         if ref_rate == 0.0:
              st.error("⚠️ Could not find ANY historical pay rate in the database.")
         
-        # Pass actual_data['leave'] so we can grab the Start/Earned figures
         expected_data = calculate_expected_pay(
             edited_df, 
             ref_rate, 
             actual_data['stub'], 
             ref_deductions, 
-            actual_data['leave']
+            actual_data['leave'],
+            ref_earnings
         )
 
         # 6. RENDER SIDE-BY-SIDE
