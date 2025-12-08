@@ -54,6 +54,50 @@ def get_db():
     return conn
 
 # --- TIMESHEET & CALCULATOR HELPERS ---
+def get_reference_data(current_stub_id):
+    """
+    Smartly fetches the base_rate and deductions.
+    If the current stub is a Shutdown ($0.00) or Missing, 
+    it hunts for the last known good paycheck.
+    """
+    conn = get_db()
+    
+    # 1. Get Current Stub Data
+    curr_earnings = pd.read_sql("SELECT * FROM earnings WHERE paystub_id = ?", conn, params=(current_stub_id,))
+    curr_deductions = pd.read_sql("SELECT * FROM deductions WHERE paystub_id = ?", conn, params=(current_stub_id,))
+    
+    # 2. Check validity (Is there a Regular rate?)
+    base_rate = 0.0
+    reg_rows = curr_earnings[curr_earnings['type'].str.contains('Regular', case=False, na=False)]
+    if not reg_rows.empty:
+        base_rate = reg_rows.iloc[0]['rate']
+        
+    # 3. IF VALID: Return current data
+    if base_rate > 0:
+        conn.close()
+        return base_rate, curr_deductions
+    
+    # 4. IF INVALID (Shutdown/Error): Search History
+    # Find last stub with valid Regular earnings
+    last_good = pd.read_sql("""
+        SELECT paystub_id, rate FROM earnings 
+        WHERE type LIKE '%Regular%' AND rate > 0 
+        ORDER BY id DESC LIMIT 1
+    """, conn)
+    
+    if not last_good.empty:
+        ref_id = int(last_good.iloc[0]['paystub_id'])
+        ref_rate = last_good.iloc[0]['rate']
+        
+        # Pull deductions from THAT valid paystub
+        ref_deductions = pd.read_sql("SELECT * FROM deductions WHERE paystub_id = ?", conn, params=(ref_id,))
+        conn.close()
+        
+        # Return historical data
+        return ref_rate, ref_deductions
+
+    conn.close()
+    return 0.0, pd.DataFrame() # Fallback if database is empty
 
 def get_pay_period_dates(period_ending_str):
     """Generates the 14 dates for a given period ending string."""
@@ -137,10 +181,10 @@ def save_timesheet(period_ending, df):
     conn.commit()
     conn.close()
 
-def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta):
+def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta, ref_deductions):
     """
-    Takes the timesheet and the base rate, returns a dict structure 
-    identical to what 'run_full_audit' returns, but calculated from scratch.
+    Calculates Gross based on manual inputs, then applies reference deductions 
+    to estimate Net Pay.
     """
     total_reg = timesheet_df['Regular'].sum()
     total_ot = timesheet_df['Overtime'].sum()
@@ -148,41 +192,40 @@ def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta):
     total_sun = timesheet_df['Sunday'].sum()
     total_hol = timesheet_df['Holiday'].sum()
 
-    # --- 1. REGULAR ---
+    # --- 1. GROSS CALCULATION ---
     amt_reg = round(total_reg * base_rate, 2)
 
-    # --- 2. OVERTIME SPLIT (True OT + FLSA) ---
     if total_ot > 0:
-        # A. True Overtime (The Straight Time Portion: 1.0x)
         amt_true_ot = round(total_ot * base_rate, 2)
-        
-        # B. FLSA Premium (The Half Time Portion: 0.5x)
-        # CRITICAL: Agency rounds the half-rate to the penny BEFORE multiplying
         flsa_rate_calc = round(base_rate * 0.5, 2)
         amt_flsa = round(total_ot * flsa_rate_calc, 2)
     else:
         amt_true_ot = 0.0
         amt_flsa = 0.0
 
-    # --- 3. DIFFERENTIALS ---
     amt_night = round(total_night * (base_rate * 0.10), 2)
     amt_sun = round(total_sun * (base_rate * 0.25), 2)
     amt_hol = round(total_hol * base_rate, 2)
 
     gross_pay = amt_reg + amt_true_ot + amt_flsa + amt_night + amt_sun + amt_hol
 
-    # --- 4. BUILD ROWS ---
-    earnings_rows = []
+    # --- 2. DEDUCTIONS & NET PAY ---
+    # We use the reference deductions (from the last good check)
+    # Note: We are cloning the amounts exactly. We are not re-calculating taxes 
+    # based on the new gross, as that requires complex tax bracket logic.
+    total_deductions = 0.0
+    if not ref_deductions.empty:
+        total_deductions = ref_deductions['amount_current'].sum()
     
+    net_pay = gross_pay - total_deductions
+
+    # --- 3. BUILD EARNINGS ROWS ---
+    earnings_rows = []
     if total_reg > 0: 
         earnings_rows.append(["Regular", base_rate, total_reg, amt_reg])
-        
     if total_ot > 0:
-        # Row 1: FLSA Premium (Rate displayed as 0.0 to match paystub)
         earnings_rows.append(["FLSA Premium", 0.0, total_ot, amt_flsa])
-        # Row 2: True Overtime
         earnings_rows.append(["True Overtime", base_rate, total_ot, amt_true_ot])
-        
     if total_night > 0: 
         earnings_rows.append(["Night Differential", base_rate * 0.10, total_night, amt_night])
     if total_sun > 0: 
@@ -200,13 +243,13 @@ def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta):
         'period_ending': actual_stub_meta['period_ending'],
         'pay_date': actual_stub_meta['pay_date'],
         'gross_pay': gross_pay,
-        'total_deductions': 0.0, 
-        'net_pay': gross_pay, 
-        'remarks': "GENERATED FROM USER TIMESHEET\n(Net Pay shown is Gross - 0 deductions)",
+        'total_deductions': total_deductions, 
+        'net_pay': net_pay, 
+        'remarks': "GENERATED FROM USER TIMESHEET\n(Deductions copied from reference check)",
         'file_source': 'GENERATED'
     }
 
-    return {'stub': stub, 'earnings': earnings_df, 'deductions': pd.DataFrame(), 'leave': pd.DataFrame()}
+    return {'stub': stub, 'earnings': earnings_df, 'deductions': ref_deductions, 'leave': pd.DataFrame()}
 
 # --- Helper: Get Latest Baseline (Restored) ---
 def get_latest_baseline():
@@ -589,31 +632,14 @@ with tab_audit:
                 st.rerun()
 
         # 5. Calculate Expected Data
-        base_rate = 0.0
+        # Retrieve Rate and Deductions (Handles Shutdowns automatically)
+        ref_rate, ref_deductions = get_reference_data(selected_id)
         
-        # A. Try to get rate from CURRENT stub
-        reg_rows = actual_data['earnings'][actual_data['earnings']['type'].str.contains('Regular', case=False, na=False)]
-        if not reg_rows.empty:
-            base_rate = reg_rows.iloc[0]['rate']
-            
-        # B. FAILSAFE: If rate is missing/zero (e.g., Shutdown or $0.00 check), find last known good rate
-        if base_rate == 0.0:
-            conn = get_db()
-            # Find the most recent 'Regular' entry with a positive rate
-            last_known = pd.read_sql("""
-                SELECT rate FROM earnings 
-                WHERE type LIKE '%Regular%' AND rate > 0 
-                ORDER BY id DESC LIMIT 1
-            """, conn)
-            conn.close()
-            
-            if not last_known.empty:
-                base_rate = last_known.iloc[0]['rate']
-                st.info(f"ℹ️ Current stub has no rate (Shutdown?). Using last known rate: ${base_rate:.2f}/hr")
-            else:
-                st.error("⚠️ Could not find ANY historical pay rate in the database. Please ingest at least one valid paycheck.")
-
-        expected_data = calculate_expected_pay(edited_df, base_rate, actual_data['stub'])
+        if ref_rate == 0.0:
+             st.error("⚠️ Could not find ANY historical pay rate in the database. Please ingest at least one valid paycheck.")
+        
+        # Pass the deductions into the calculator
+        expected_data = calculate_expected_pay(edited_df, ref_rate, actual_data['stub'], ref_deductions)
 
         # 6. RENDER SIDE-BY-SIDE
         if flags:
