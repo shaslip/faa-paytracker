@@ -20,6 +20,7 @@ def setup_database():
         gross_pay REAL,
         total_deductions REAL,
         agency TEXT,
+        remarks TEXT,
         file_source TEXT
     )''')
 
@@ -105,6 +106,19 @@ def parse_html_paystub(html_content, filename, conn):
         rows = pay_table.find_all("tr")
         gross_pay = clean_float(rows[1].find_all("td")[1].get_text())
         total_deducs = clean_float(rows[2].find_all("td")[1].get_text())
+        
+        # --- NEW: Extract Remarks ---
+        remarks_node = soup.find(id="lblRemarks")
+        # Get text, strip whitespace, and preserve line breaks if possible
+        remarks = remarks_node.get_text("\n").strip() if remarks_node else ""
+
+        print(f"Importing {filename}: {pay_date} (Net: ${net_pay})")
+
+        # Insert Master Record (Updated Query)
+        c.execute('''INSERT INTO paystubs 
+                     (pay_date, period_ending, net_pay, gross_pay, total_deductions, agency, remarks, file_source)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (pay_date, period_ending, net_pay, gross_pay, total_deducs, agency, remarks, filename))
 
         print(f"Importing {filename}: {pay_date} (Net: ${net_pay})")
 
