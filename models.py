@@ -47,12 +47,14 @@ def save_user_schedule(df):
         s = row['start_time']
         e = row['end_time']
         
-        # LOGIC: If start_time exists, it's a workday.
+        # If user cleared the cell, it might be None or empty string
+        if s == "" or pd.isna(s): s = None
+        if e == "" or pd.isna(e): e = None
+        
         is_workday = 1 if s is not None else 0
         
-        # Convert objects to string "HH:MM" for SQLite
-        if hasattr(s, 'strftime'): s = s.strftime("%H:%M")
-        if hasattr(e, 'strftime'): e = e.strftime("%H:%M")
+        # Since input is now TextColumn, s and e are ALREADY strings ("07:00").
+        # We don't need strftime.
         
         c.execute("UPDATE user_schedule SET start_time=?, end_time=?, is_workday=? WHERE day_of_week=?", 
                   (s, e, is_workday, row['day_of_week']))
@@ -85,11 +87,7 @@ def get_pay_period_dates(period_ending_str):
 
 def load_timesheet_v2(period_ending):
     conn = get_db()
-    # 1. Get the Standard Schedule (Basic Facts)
-    # We use this to populate defaults if no specific entry exists for a day
     defaults = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
-    
-    # 2. Get Saved Actuals for this specific pay period
     saved = pd.read_sql("SELECT * FROM timesheet_entry_v2 WHERE period_ending = ?", conn, params=(period_ending,))
     conn.close()
     
@@ -100,48 +98,35 @@ def load_timesheet_v2(period_ending):
         dt = datetime.strptime(d, "%Y-%m-%d")
         day_idx = dt.weekday()
         
-        # Check if we have a saved entry for this specific date
         row = saved[saved['day_date'] == d] if not saved.empty else pd.DataFrame()
         
         if not row.empty:
-            # --- USE SAVED DATA ---
+            # RETURN STRINGS directly from DB
             r = row.iloc[0]
-            s = datetime.strptime(r['start_time'], "%H:%M").time() if r['start_time'] else None
-            e = datetime.strptime(r['end_time'], "%H:%M").time() if r['end_time'] else None
-            
             data.append({
                 "Date": d,
-                "Start": s,
-                "End": e,
-                "Leave_Type": r['leave_type'], # Can be None
+                "Start": r['start_time'], # String "07:00" or None
+                "End": r['end_time'],     # String "15:00" or None
+                "Leave_Type": r['leave_type'],
                 "OJTI": r['ojti_hours'],
                 "CIC": r['cic_hours']
             })
         else:
-            # --- USE STANDARD SCHEDULE DEFAULTS ---
             def_row = defaults.loc[day_idx] if day_idx in defaults.index else None
-            
             if def_row is not None and def_row['is_workday']:
-                # Pre-fill with Standard Times
-                s = datetime.strptime(def_row['start_time'], "%H:%M").time() if def_row['start_time'] else None
-                e = datetime.strptime(def_row['end_time'], "%H:%M").time() if def_row['end_time'] else None
+                # RETURN STRINGS directly from defaults
                 data.append({
                     "Date": d, 
-                    "Start": s, 
-                    "End": e, 
-                    "Leave_Type": None, # Default to no leave
+                    "Start": def_row['start_time'], 
+                    "End": def_row['end_time'], 
+                    "Leave_Type": None,
                     "OJTI": 0.0, 
                     "CIC": 0.0
                 })
             else:
-                # Non-workday default (RDO)
                 data.append({
-                    "Date": d, 
-                    "Start": None, 
-                    "End": None, 
-                    "Leave_Type": None, 
-                    "OJTI": 0.0, 
-                    "CIC": 0.0
+                    "Date": d, "Start": None, "End": None, 
+                    "Leave_Type": None, "OJTI": 0.0, "CIC": 0.0
                 })
                 
     return pd.DataFrame(data)
@@ -150,8 +135,13 @@ def save_timesheet_v2(period_ending, df):
     conn = get_db()
     c = conn.cursor()
     for _, row in df.iterrows():
-        s_str = row['Start'].strftime("%H:%M") if row['Start'] else None
-        e_str = row['End'].strftime("%H:%M") if row['End'] else None
+        # Data is already string from TextColumn
+        s_str = row['Start']
+        e_str = row['End']
+        
+        # Clean up empty strings -> None for DB
+        if not s_str: s_str = None
+        if not e_str: e_str = None
         
         c.execute("""
             INSERT INTO timesheet_entry_v2 (period_ending, day_date, start_time, end_time, leave_type, ojti_hours, cic_hours)
