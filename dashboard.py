@@ -14,33 +14,36 @@ tab_audit, tab_graphs, tab_facts, tab_ingest = st.tabs(["🧐 Audit & Time", "�
 # --- TAB: BASIC FACTS (Schedule Setup) ---
 with tab_facts:
     st.header("My Standard Schedule")
-    st.info("Define your default shifts here. These times are used to calculate 'Leave' when you work less than scheduled.")
+    st.info("Set your default start/end times. Leave them empty for days off.")
     
     # Load current schedule
     conn = models.get_db()
     sched_df = pd.read_sql("SELECT * FROM user_schedule ORDER BY day_of_week", conn)
     conn.close()
     
-    # --- FIX: Convert String 'HH:MM' to datetime.time objects for Streamlit ---
-    sched_df['start_time'] = pd.to_datetime(sched_df['start_time'], format='%H:%M', errors='coerce').dt.time
-    sched_df['end_time'] = pd.to_datetime(sched_df['end_time'], format='%H:%M', errors='coerce').dt.time
-    # --------------------------------------------------------------------------
+    # --- FIX 1: Strict Data Conversion for Streamlit Editor ---
+    # Streamlit freezes if it sees Pandas 'NaT'. We must convert NaT -> None.
+    s_temp = pd.to_datetime(sched_df['start_time'], format='%H:%M', errors='coerce')
+    sched_df['start_time'] = s_temp.dt.time.where(s_temp.notna(), None)
+    
+    e_temp = pd.to_datetime(sched_df['end_time'], format='%H:%M', errors='coerce')
+    sched_df['end_time'] = e_temp.dt.time.where(e_temp.notna(), None)
+    # ---------------------------------------------------------
 
-    # Map integers 0-6 to Monday-Sunday for readability
+    # Map integers 0-6 to Monday-Sunday
     days_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
     sched_df['Day'] = sched_df['day_of_week'].map(days_map)
     
-    # Reorder columns for the editor
-    sched_df = sched_df[['Day', 'is_workday', 'start_time', 'end_time', 'day_of_week']]
+    # Reorder - Removed 'is_workday' from view
+    sched_df = sched_df[['Day', 'start_time', 'end_time', 'day_of_week']]
     
     edited_sched = st.data_editor(
         sched_df,
         hide_index=True,
+        use_container_width=True,
         column_config={
-            "day_of_week": None, # Hide the ID column
+            "day_of_week": None, 
             "Day": st.column_config.TextColumn(disabled=True),
-            "is_workday": "Workday?",
-            # Now compatible because the data is effectively datetime.time
             "start_time": st.column_config.TimeColumn("Std Start", format="HH:mm", step=60),
             "end_time": st.column_config.TimeColumn("Std End", format="HH:mm", step=60)
         },
@@ -50,7 +53,7 @@ with tab_facts:
     if st.button("💾 Save Standard Schedule"):
         models.save_user_schedule(edited_sched)
         st.success("Standard schedule updated!")
-        st.rerun() 
+        st.rerun()
 
 with tab_audit:
     st.header("Deep Dive Audit")
