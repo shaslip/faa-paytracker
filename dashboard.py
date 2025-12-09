@@ -44,6 +44,7 @@ with tab_facts:
         column_config={
             "day_of_week": None, 
             "Day": st.column_config.TextColumn(disabled=True),
+            # FORCE HH:mm
             "start_time": st.column_config.TimeColumn("Std Start", format="HH:mm", step=60),
             "end_time": st.column_config.TimeColumn("Std End", format="HH:mm", step=60)
         },
@@ -97,10 +98,9 @@ with tab_audit:
                 hide_index=True,
                 column_config={
                     "Date": st.column_config.DateColumn(format="MM-DD (ddd)", disabled=True),
-                    # FORCE 24H Format here
+                    # FORCE HH:mm here too
                     "Start": st.column_config.TimeColumn("Act Start", format="HH:mm", step=15),
                     "End": st.column_config.TimeColumn("Act End", format="HH:mm", step=15),
-                    # We keep Leave TYPE (sick/annual) but remove Leave HOURS
                     "Leave_Type": st.column_config.SelectboxColumn("Leave Type (if gap)", options=["Annual", "Sick", "Credit", "Comp", "LWOP"]),
                     "OJTI": st.column_config.NumberColumn("OJTI (Hrs)"),
                     "CIC": st.column_config.NumberColumn("CIC (Hrs)")
