@@ -34,13 +34,27 @@ def setup_database():
     # 3. Timesheet V2 (Start/End Times)
     conn.execute('''CREATE TABLE IF NOT EXISTS timesheet_entry_v2 (
         period_ending TEXT, day_date TEXT, start_time TEXT, end_time TEXT,
-        leave_hours REAL DEFAULT 0, ojti_hours REAL DEFAULT 0, cic_hours REAL DEFAULT 0,
+        leave_type TEXT, ojti_hours REAL DEFAULT 0, cic_hours REAL DEFAULT 0,
         UNIQUE(period_ending, day_date)
     )''')
-    
     conn.commit()
     conn.close()
 
+def save_user_schedule(df):
+    conn = get_db()
+    c = conn.cursor()
+    for _, row in df.iterrows():
+        # Handle time objects or strings
+        s = row['start_time']
+        e = row['end_time']
+        if hasattr(s, 'strftime'): s = s.strftime("%H:%M")
+        if hasattr(e, 'strftime'): e = e.strftime("%H:%M")
+        
+        c.execute("UPDATE user_schedule SET start_time=?, end_time=?, is_workday=? WHERE day_of_week=?", 
+                  (s, e, row['is_workday'], row['day_of_week']))
+    conn.commit()
+    conn.close()
+    
 def get_paystubs_meta():
     conn = get_db()
     df = pd.read_sql("SELECT id, pay_date, period_ending, net_pay, gross_pay, file_source FROM paystubs ORDER BY pay_date DESC", conn)
@@ -102,13 +116,14 @@ def save_timesheet_v2(period_ending, df):
     for _, row in df.iterrows():
         s_str = row['Start'].strftime("%H:%M") if row['Start'] else None
         e_str = row['End'].strftime("%H:%M") if row['End'] else None
+        
         c.execute("""
-            INSERT INTO timesheet_entry_v2 (period_ending, day_date, start_time, end_time, leave_hours, ojti_hours, cic_hours)
+            INSERT INTO timesheet_entry_v2 (period_ending, day_date, start_time, end_time, leave_type, ojti_hours, cic_hours)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(period_ending, day_date) DO UPDATE SET
             start_time=excluded.start_time, end_time=excluded.end_time,
-            leave_hours=excluded.leave_hours, ojti_hours=excluded.ojti_hours, cic_hours=excluded.cic_hours
-        """, (period_ending, row['Date'], s_str, e_str, row['Leave'], row['OJTI'], row['CIC']))
+            leave_type=excluded.leave_type, ojti_hours=excluded.ojti_hours, cic_hours=excluded.cic_hours
+        """, (period_ending, row['Date'], s_str, e_str, row['Leave_Type'], row['OJTI'], row['CIC']))
     conn.commit()
     conn.close()
 
