@@ -21,6 +21,11 @@ with tab_facts:
     sched_df = pd.read_sql("SELECT * FROM user_schedule ORDER BY day_of_week", conn)
     conn.close()
     
+    # --- FIX: Convert String 'HH:MM' to datetime.time objects for Streamlit ---
+    sched_df['start_time'] = pd.to_datetime(sched_df['start_time'], format='%H:%M', errors='coerce').dt.time
+    sched_df['end_time'] = pd.to_datetime(sched_df['end_time'], format='%H:%M', errors='coerce').dt.time
+    # --------------------------------------------------------------------------
+
     # Map integers 0-6 to Monday-Sunday for readability
     days_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
     sched_df['Day'] = sched_df['day_of_week'].map(days_map)
@@ -35,7 +40,7 @@ with tab_facts:
             "day_of_week": None, # Hide the ID column
             "Day": st.column_config.TextColumn(disabled=True),
             "is_workday": "Workday?",
-            # Force Military Time Format
+            # Now compatible because the data is effectively datetime.time
             "start_time": st.column_config.TimeColumn("Std Start", format="HH:mm", step=60),
             "end_time": st.column_config.TimeColumn("Std End", format="HH:mm", step=60)
         },
@@ -45,6 +50,7 @@ with tab_facts:
     if st.button("💾 Save Standard Schedule"):
         models.save_user_schedule(edited_sched)
         st.success("Standard schedule updated!")
+        st.rerun() 
 
 with tab_audit:
     st.header("Deep Dive Audit")
