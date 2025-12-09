@@ -21,11 +21,6 @@ with tab_facts:
     sched_df = pd.read_sql("SELECT * FROM user_schedule ORDER BY day_of_week", conn)
     conn.close()
     
-    # --- SIMPLIFICATION: Keep as Strings for Text Editor ---
-    # We do NOT convert to datetime objects anymore.
-    # We just ensure None/NaN becomes an empty string for the editor if needed, 
-    # but Streamlit handles None in TextColumn well.
-    
     # Map integers 0-6 to Monday-Sunday
     days_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
     sched_df['Day'] = sched_df['day_of_week'].map(days_map)
@@ -36,7 +31,7 @@ with tab_facts:
     edited_sched = st.data_editor(
         sched_df,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",  # <--- FIXED: Replaces use_container_width=True
         column_config={
             "day_of_week": None, 
             "Day": st.column_config.TextColumn(disabled=True),
@@ -97,6 +92,7 @@ with tab_audit:
                 ts_v2, 
                 num_rows="fixed", 
                 hide_index=True,
+                width="stretch", # <--- ADDED for consistency
                 column_config={
                     "Date": st.column_config.DateColumn(format="MM-DD (ddd)", disabled=True),
                     # FORCE MILITARY TIME via Regex
@@ -127,9 +123,7 @@ with tab_audit:
                 # --- A. Run Time Engine ---
                 bucket_rows = []
                 for _, row in edited.iterrows():
-                    # We must manually convert Strings -> Time Objects for logic.py, 
-                    # because logic.py expects objects for math.
-                    
+                    # Manual String -> Time Object Conversion for logic.py
                     s_obj = pd.to_datetime(row['Start'], format='%H:%M').time() if row['Start'] else None
                     e_obj = pd.to_datetime(row['End'], format='%H:%M').time() if row['End'] else None
                     
