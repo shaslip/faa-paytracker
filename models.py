@@ -44,14 +44,18 @@ def save_user_schedule(df):
     conn = get_db()
     c = conn.cursor()
     for _, row in df.iterrows():
-        # Handle time objects or strings
         s = row['start_time']
         e = row['end_time']
+        
+        # LOGIC: If start_time exists, it's a workday.
+        is_workday = 1 if s is not None else 0
+        
+        # Convert objects to string "HH:MM" for SQLite
         if hasattr(s, 'strftime'): s = s.strftime("%H:%M")
         if hasattr(e, 'strftime'): e = e.strftime("%H:%M")
         
         c.execute("UPDATE user_schedule SET start_time=?, end_time=?, is_workday=? WHERE day_of_week=?", 
-                  (s, e, row['is_workday'], row['day_of_week']))
+                  (s, e, is_workday, row['day_of_week']))
     conn.commit()
     conn.close()
     
