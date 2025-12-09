@@ -1,19 +1,13 @@
 import pandas as pd
+import os
 
 def get_css():
-    return """
-    <style>
-        .audit-error { color: red !important; font-weight: bold !important; text-decoration: underline wavy red !important; cursor: help !important; }
-        .comparison-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .comp-col h3 { text-align: center; padding: 10px; color: white; border-radius: 5px; }
-        .comp-expected { border-top: 5px solid #2e86c1; }
-        .comp-actual { border-top: 5px solid #27ae60; }
-        .stub-wrapper { max-width: 1000px; margin: 0 auto; background: white; padding: 20px; border: 1px solid #ddd; }
-        /* Ensure tables don't get messed up by markdown */
-        .stub-wrapper table { border-collapse: collapse; width: 100%; }
-        .stub-wrapper td, .stub-wrapper th { padding: 4px; }
-    </style>
-    """
+    """Reads the external style.css file."""
+    css_file = 'style.css'
+    if os.path.exists(css_file):
+        with open(css_file) as f:
+            return f'<style>{f.read()}</style>'
+    return "<style></style>"
 
 def render_paystub_html(data, flags=None, mode="actual"):
     if flags is None: flags = {}
@@ -26,35 +20,103 @@ def render_paystub_html(data, flags=None, mode="actual"):
         return txt
 
     parts = []
-    # HTML must be compact (no indentation) to prevent Markdown code-block interpretation
+    # Compact HTML to avoid Markdown parsing issues
     parts.append('<div class="stub-wrapper"><div id="elsInfoTable">')
-    parts.append('<table class="table els-table" cellpadding="0" cellspacing="0" style="width:100%"><tbody>')
+    parts.append('<table class="table els-table" cellpadding="0" cellspacing="0"><tbody>')
     
-    # Header
-    parts.append(f'<tr><td colspan="6" rowspan="2" class="col-6"><span class="text-align-center cell-title-lg2">{stub["agency"]}</span><br><span class="text-align-center cell-title-lg2">Earnings and Leave Statement</span></td><td colspan="3" class="col-3"><span class="cell-title">For Pay Period Ending</span><br><span>{stub["period_ending"]}</span></td><td colspan="3" class="col-3 no-margin-padding"><span class="cell-title blue">Net Pay</span><br><span class="cell">$ {val(stub["net_pay"], "net_pay")}</span></td></tr>')
-    parts.append('<tr><td colspan="6"></td></tr>')
+    # --- HEADER SECTION ---
+    # Col-6: Agency | Col-3: Period Ending | Col-3: Net Pay
+    parts.append(f'''
+    <tr>
+        <td colspan="6" rowspan="2" class="col-6">
+            <span class="text-align-center cell-title-lg2">{stub['agency']}</span><br>
+            <span class="text-align-center cell-title-lg2">Earnings and Leave Statement</span>
+        </td>
+        <td colspan="3" class="col-3">
+            <span class="cell-title">For Pay Period Ending</span><span>{stub['period_ending']}</span>
+        </td>
+        <td colspan="3" class="col-3 no-margin-padding">
+            <span class="cell-title blue">Net Pay</span><span class="cell">$ {val(stub['net_pay'], 'net_pay')}</span>
+        </td>
+    </tr>
+    <tr>
+        <td colspan="3"><span class="cell-title">Pay Date</span><span>{stub['pay_date']}</span></td>
+        <td colspan="3"></td>
+    </tr>
+    ''')
 
-    # Earnings
-    parts.append('<tr><td colspan="12" class="blue"><span class="cell-title-lg">Earnings</span></td></tr>')
-    parts.append('<tr><th colspan="4">Type</th><th colspan="2" class="text-align-right">Rate</th><th colspan="2" class="text-align-right">Hours</th><th colspan="4" class="text-align-right">Amount</th></tr>')
+    # --- SUMMARY TABLE (Nested) ---
+    parts.append(f'''
+    <tr>
+        <td colspan="5" class="no-margin-padding">
+            <table class="table no-margin-padding no-border">
+                <tr><th class="col-6 blue no-border">Your Pay Consists of</th><th class="col-3 blue no-border text-align-right">Current</th></tr>
+                <tr><td>Gross Pay</td><td class="text-align-right">{val(stub['gross_pay'], 'gross_pay')}</td></tr>
+                <tr><td>Total Deductions</td><td class="text-align-right">{val(stub['total_deductions'])}</td></tr>
+                <tr><td>Net Pay</td><td class="text-align-right">{val(stub['net_pay'])}</td></tr>
+            </table>
+        </td>
+        <td colspan="7"></td>
+    </tr>
+    ''')
+
+    # --- EARNINGS SECTION ---
+    parts.append('<tr><td colspan="12" class="blue"><span class="text-align-center cell-title-lg">Earnings</span></td></tr>')
+    parts.append('<tr><td colspan="12"><table class="table no-border no-margin-padding">')
+    parts.append('<tr><th class="col-5">Type</th><th class="col-1 text-align-right">Rate</th><th class="col-1 text-align-right">Hours</th><th class="col-1 text-align-right">Current</th><th class="col-1 text-align-right">YTD</th></tr>')
     
     if not data['earnings'].empty:
         for _, r in data['earnings'].iterrows():
-            parts.append(f'<tr><td colspan="4">{r["type"]}</td><td colspan="2" class="text-align-right">{val(r["rate"], money=False)}</td><td colspan="2" class="text-align-right">{val(r["hours_current"], money=False)}</td><td colspan="4" class="text-align-right">{val(r["amount_current"])}</td></tr>')
+            parts.append(f'''
+            <tr>
+                <td>{r['type']}</td>
+                <td class="text-align-right">{val(r['rate'], money=False)}</td>
+                <td class="text-align-right">{val(r['hours_current'], money=False)}</td>
+                <td class="text-align-right">{val(r['amount_current'])}</td>
+                <td class="text-align-right">{val(r['amount_ytd'])}</td>
+            </tr>
+            ''')
+    parts.append('</table></td></tr>')
 
-    # Deductions
+    # --- DEDUCTIONS SECTION ---
     if not data['deductions'].empty:
-        parts.append('<tr><td colspan="12" class="blue"><span class="cell-title-lg">Deductions</span></td></tr>')
+        parts.append('<tr><td colspan="12" class="blue"><span class="text-align-center cell-title-lg">Deductions</span></td></tr>')
+        parts.append('<tr><td colspan="12"><table class="table no-border no-margin-padding">')
+        parts.append('<tr><th class="col-4">Type</th><th class="col-2 text-align-right">Current</th><th class="col-2 text-align-right">YTD</th></tr>')
+        
         for _, r in data['deductions'].iterrows():
-             parts.append(f"<tr><td colspan='8'>{r['type']}</td><td colspan='4' class='text-align-right'>{val(r['amount_current'])}</td></tr>")
-             
-    # Leave
+             parts.append(f'''
+             <tr>
+                <td>{r['type']}</td>
+                <td class="text-align-right">{val(r['amount_current'])}</td>
+                <td class="text-align-right">{val(r['amount_ytd'])}</td>
+             </tr>
+             ''')
+        parts.append('</table></td></tr>')
+
+    # --- LEAVE SECTION ---
     if not data['leave'].empty:
-        parts.append('<tr><td colspan="12" class="blue"><span class="cell-title-lg">Leave</span></td></tr>')
-        parts.append('<tr><th colspan="4">Type</th><th colspan="2" class="text-align-right">Start</th><th colspan="2" class="text-align-right">Earn</th><th colspan="2" class="text-align-right">Used</th><th colspan="2" class="text-align-right">End</th></tr>')
+        parts.append('<tr><td colspan="12" class="blue"><span class="text-align-center cell-title-lg">Leave</span></td></tr>')
+        parts.append('<tr><td colspan="12"><table class="table no-border no-margin-padding">')
+        parts.append('<tr><th class="col-2">Type</th><th class="col-1 text-align-right">Start Bal</th><th class="col-1 text-align-right">Earned</th><th class="col-1 text-align-right">Used</th><th class="col-1 text-align-right">End Bal</th></tr>')
+        
         for _, r in data['leave'].iterrows():
             fid = f"leave_{r['type']}_end"
-            parts.append(f'<tr><td colspan="4">{r["type"]}</td><td colspan="2" class="text-align-right">{val(r["balance_start"], money=False)}</td><td colspan="2" class="text-align-right">{val(r["earned_current"], money=False)}</td><td colspan="2" class="text-align-right">{val(r["used_current"], money=False)}</td><td colspan="2" class="text-align-right">{val(r["balance_end"], fid, money=False)}</td></tr>')
+            parts.append(f'''
+            <tr>
+                <td>{r['type']}</td>
+                <td class="text-align-right">{val(r['balance_start'], money=False)}</td>
+                <td class="text-align-right">{val(r['earned_current'], money=False)}</td>
+                <td class="text-align-right">{val(r['used_current'], money=False)}</td>
+                <td class="text-align-right">{val(r['balance_end'], fid, money=False)}</td>
+            </tr>
+            ''')
+        parts.append('</table></td></tr>')
+
+    # --- REMARKS ---
+    if stub.get('remarks'):
+        rem = stub['remarks'].replace('\n', '<br>')
+        parts.append(f'<tr><td colspan="12" class="blue"><span class="text-align-center cell-title-lg">Remarks</span></td></tr><tr><td colspan="12" style="padding:10px"><span style="font-family:monospace">{rem}</span></td></tr>')
 
     parts.append('</tbody></table></div></div>')
     return "".join(parts)
