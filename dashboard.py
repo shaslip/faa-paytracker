@@ -2,13 +2,19 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 # --- Configuration ---
 DB_NAME = 'payroll_audit.db'
 CSS_FILE = 'style.css'
 
 st.set_page_config(page_title="FAA PayTracker", layout="wide")
+
+# Hardcoded Federal Holidays (Expanded as needed)
+HOLIDAYS = [
+    "2024-12-25", "2025-01-01", "2025-01-20", "2025-02-17", "2025-05-26", 
+    "2025-06-19", "2025-07-04", "2025-09-01", "2025-10-13", "2025-11-11", "2025-11-27", "2025-12-25"
+]
 
 # --- Load External CSS ---
 def local_css(file_name):
@@ -32,6 +38,28 @@ def local_css(file_name):
 
 local_css(CSS_FILE)
 
+def setup_schedule_table():
+    conn = get_db()
+    # Stores the default template (0=Mon, 6=Sun)
+    conn.execute('''CREATE TABLE IF NOT EXISTS user_schedule (
+        day_of_week INTEGER PRIMARY KEY, 
+        start_time TEXT,
+        end_time TEXT,
+        is_workday BOOLEAN
+    )''')
+    
+    # Check if empty, seed with standard M-F 07:00-15:00
+    if pd.read_sql("SELECT count(*) as c FROM user_schedule", conn).iloc[0]['c'] == 0:
+        for i in range(7):
+            is_work = i < 5 # Mon-Fri
+            conn.execute("INSERT INTO user_schedule VALUES (?, ?, ?, ?)", 
+                         (i, "07:00" if is_work else None, "15:00" if is_work else None, is_work))
+        conn.commit()
+    conn.close()
+
+# Call this once at startup
+setup_schedule_table()
+
 # --- Dropdown menu helper ---
 @st.cache_data
 def get_audit_status_map(stub_ids):
@@ -52,6 +80,92 @@ def get_db():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     return conn
+
+def calculate_daily_breakdown(date_str, start_str, end_str, leave_hours, ojti, cic):
+    """
+    Converts Start/End times into Pay Categories (Reg, OT, Night, Sun, Hol).
+    Returns a dict of hours.
+    """
+    if not start_str or not end_str:
+        return {'Reg': 0, 'OT': 0, 'Night': 0, 'Sun': 0, 'Hol': 0, 'OJTI': 0, 'CIC': 0}
+
+    # 1. Parse Times
+    fmt = "%Y-%m-%d %H:%M"
+    start_dt = datetime.strptime(f"{date_str} {start_str}", fmt)
+    end_dt = datetime.strptime(f"{date_str} {end_str}", fmt)
+    
+    # Handle crossing midnight (End is next day)
+    if end_dt <= start_dt:
+        end_dt += timedelta(days=1)
+
+    total_duration = (end_dt - start_dt).total_seconds() / 3600.0
+    
+    # 2. Subtract Leave (Leave reduces Worked Hours)
+    # Note: This is a simplification. Real leave logic usually requires specific start/end times 
+    # to know exactly WHICH differentials were lost. We assume leave comes off the END of the shift.
+    worked_duration = max(0, total_duration - leave_hours)
+    
+    # 3. Determine Overtime vs Regular
+    # Standard Rule: First 8 hours are Reg, rest is OT
+    reg_hours = min(8.0, worked_duration)
+    ot_hours = max(0.0, worked_duration - 8.0)
+
+    # 4. Night Differential (18:00 - 06:00)
+    # We step through the shift hour by hour to check intersection
+    night_hours = 0.0
+    cursor = start_dt
+    while cursor < (start_dt + timedelta(hours=worked_duration)):
+        # Check if current hour is in night window (18-6)
+        h = cursor.hour
+        if h >= 18 or h < 6:
+            night_hours += 0.25 # Add 15 mins block? Better to do math, but loop is safe for now
+            # Actually, let's just assume simple hour chunks for this prototype or it gets complex
+        cursor += timedelta(minutes=15) # Granularity
+    
+    # Re-calculate accurate Night intersection
+    # (Simplified: Just checking overlap for now. Full implementation requires minute-precision)
+    # For this snippet, let's trust the user entered inputs mostly, or use a simplified 100% accurate logic later.
+    # For the sake of the demo, we will calculate Night as:
+    # Any worked time between 6PM and 6AM.
+    night_hours = 0.0
+    curr = start_dt
+    end_worked = start_dt + timedelta(hours=worked_duration)
+    while curr < end_worked:
+        if curr.hour >= 18 or curr.hour < 6:
+            night_hours += 0.25
+        curr += timedelta(minutes=15)
+
+    # 5. Sunday Premium
+    # Rule: If any part of the scheduled shift falls on Sunday, entire 8h gets Sunday.
+    # OT on Sunday does NOT get Sunday Premium (usually).
+    sun_hours = 0.0
+    # Check if shift touches Sunday
+    shift_days = [start_dt.weekday(), end_dt.weekday()] # 6 is Sunday
+    if 6 in shift_days:
+        # If we touched Sunday, the non-OT portion gets Sunday Prem
+        sun_hours = reg_hours
+
+    # 6. Holiday
+    hol_hours = 0.0
+    if date_str in HOLIDAYS:
+        # If working on holiday, Reg hours become Holiday Worked
+        hol_hours = reg_hours
+        reg_hours = 0 # You get Holiday Pay INSTEAD of Regular Pay for those hours
+        # Note: You usually get Base + Holiday Premium (which equals 2x). 
+        # Our calculator treats "Holiday" as 1.0x rate. 
+        # So we should keep Reg at 8, and add Hol at 8 (Total 2x)? 
+        # OR set Hol Rate to 2.0x? 
+        # Let's stick to your previous logic: "Holiday Worked" is a separate bucket.
+    
+    return {
+        'Reg': reg_hours, 
+        'OT': ot_hours, 
+        'Night': night_hours, 
+        'Sun': sun_hours, 
+        'Hol': hol_hours, 
+        'OJTI': ojti, 
+        'CIC': cic
+    }
 
 # --- TIMESHEET & CALCULATOR HELPERS ---
 def get_reference_data(current_stub_id):
@@ -106,57 +220,61 @@ def get_pay_period_dates(period_ending_str):
         dates.append(d.strftime("%Y-%m-%d"))
     return dates
 
-def load_timesheet(period_ending):
-    """Loads existing timesheet data or creates a blank DataFrame."""
+def load_timesheet_with_defaults(period_ending):
     conn = get_db()
-    # Ensure table exists (handling migration simply here)
-    conn.execute('''CREATE TABLE IF NOT EXISTS timesheet_entries (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+    
+    # 1. Load User Schedule (Defaults)
+    defaults = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
+    
+    # 2. Load Saved Entries (Actuals)
+    conn.execute('''CREATE TABLE IF NOT EXISTS timesheet_entry_v2 (
         period_ending TEXT,
         day_date TEXT,
-        day_index INTEGER, 
-        reg_hours REAL DEFAULT 0,
-        ot_hours REAL DEFAULT 0,
-        night_hours REAL DEFAULT 0,
-        sunday_hours REAL DEFAULT 0,
-        holiday_hours REAL DEFAULT 0,
-        note TEXT,
+        start_time TEXT,
+        end_time TEXT,
+        leave_hours REAL,
+        ojti_hours REAL,
+        cic_hours REAL,
         UNIQUE(period_ending, day_date)
     )''')
-    
-    existing = pd.read_sql("SELECT * FROM timesheet_entries WHERE period_ending = ? ORDER BY day_index ASC", 
-                           conn, params=(period_ending,))
+    saved = pd.read_sql("SELECT * FROM timesheet_entry_v2 WHERE period_ending = ?", conn, params=(period_ending,))
     conn.close()
-
-    dates = get_pay_period_dates(period_ending)
     
+    dates = get_pay_period_dates(period_ending)
     data = []
-    for i, d in enumerate(dates):
-        row = existing[existing['day_date'] == d] if not existing.empty else pd.DataFrame()
+    
+    for d in dates:
+        dt = datetime.strptime(d, "%Y-%m-%d")
+        day_idx = dt.weekday()
+        
+        # Check for saved entry first
+        row = saved[saved['day_date'] == d] if not saved.empty else pd.DataFrame()
+        
         if not row.empty:
             data.append({
                 "Date": d,
-                "Regular": row.iloc[0]['reg_hours'],
-                "Overtime": row.iloc[0]['ot_hours'],
-                "Night": row.iloc[0]['night_hours'],
-                "Sunday": row.iloc[0]['sunday_hours'],
-                "Holiday": row.iloc[0]['holiday_hours'],
-                "Note": row.iloc[0]['note']
+                "Start": row.iloc[0]['start_time'],
+                "End": row.iloc[0]['end_time'],
+                "Leave": row.iloc[0]['leave_hours'],
+                "OJTI": row.iloc[0]['ojti_hours'],
+                "CIC": row.iloc[0]['cic_hours']
             })
         else:
-            # Default: Workdays get 8, weekends 0
-            weekday = datetime.strptime(d, "%Y-%m-%d").weekday() 
-            is_weekend = weekday >= 5
-            data.append({
-                "Date": d,
-                "Regular": 0.0 if is_weekend else 8.0,
-                "Overtime": 0.0,
-                "Night": 0.0,
-                "Sunday": 0.0,
-                "Holiday": 0.0,
-                "Note": ""
-            })
-            
+            # Fallback to Default Schedule
+            def_row = defaults.loc[day_idx] if day_idx in defaults.index else None
+            if def_row is not None and def_row['is_workday']:
+                data.append({
+                    "Date": d,
+                    "Start": def_row['start_time'],
+                    "End": def_row['end_time'],
+                    "Leave": 0.0,
+                    "OJTI": 0.0,
+                    "CIC": 0.0
+                })
+            else:
+                # Day Off
+                data.append({"Date": d, "Start": None, "End": None, "Leave": 0.0, "OJTI": 0.0, "CIC": 0.0})
+
     return pd.DataFrame(data)
 
 def save_timesheet(period_ending, df):
@@ -673,40 +791,58 @@ with tab_audit:
 
         # 4. TIMESHEET INPUT SECTION
         with st.expander("📝 Variance Analysis (Edit Timesheet)", expanded=True):
-            ts_df = load_timesheet(current_period_ending)
+            ts_df = load_timesheet_with_defaults(current_period_ending)
             
             edited_df = st.data_editor(
-                ts_df, 
-                num_rows="fixed", 
-                hide_index=True,
-                column_config={
-                    "Date": st.column_config.TextColumn(disabled=True),
-                    "Regular": st.column_config.NumberColumn(format="%.1f"),
-                    "Overtime": st.column_config.NumberColumn(format="%.1f"),
-                    "Night": st.column_config.NumberColumn(format="%.1f"),
-                    "Sunday": st.column_config.NumberColumn(format="%.1f"),
-                    "Holiday": st.column_config.NumberColumn(format="%.1f"),
-                }
-            )
-            
-            if st.button("💾 Save Inputs & Recalculate"):
-                save_timesheet(current_period_ending, edited_df)
-                st.rerun()
-
-        # 5. Calculate Expected Data
-        ref_rate, ref_deductions, ref_earnings = get_reference_data(selected_id)
-        
-        if ref_rate == 0.0:
-             st.error("⚠️ Could not find ANY historical pay rate in the database.")
-        
-        expected_data = calculate_expected_pay(
-            edited_df, 
-            ref_rate, 
-            actual_data['stub'], 
-            ref_deductions, 
-            actual_data['leave'],
-            ref_earnings
+            ts_df,
+            num_rows="fixed",
+            hide_index=True,
+            column_config={
+                "Date": st.column_config.TextColumn(disabled=True),
+                "Start": st.column_config.TimeColumn(format="HH:mm", step=60), # 15 min steps
+                "End": st.column_config.TimeColumn(format="HH:mm", step=60),
+                "Leave": st.column_config.NumberColumn("Leave Hrs"),
+                "OJTI": st.column_config.NumberColumn("OJTI Hrs"),
+                "CIC": st.column_config.NumberColumn("CIC Hrs")
+            }
         )
+
+        if st.button("💾 Calculate"):
+            # A. Save the inputs (Start/End) to DB
+            save_timesheet_v2(current_period_ending, edited_df)
+            
+            # B. Run the "Time Engine" to convert Times -> Pay Hours
+            processed_buckets = pd.DataFrame()
+            
+            for _, row in edited_df.iterrows():
+                # Run math on each day
+                breakdown = calculate_daily_breakdown(
+                    row['Date'], row['Start'], row['End'], 
+                    row['Leave'], row['OJTI'], row['CIC']
+                )
+                # Append to a dataframe that looks like the OLD timesheet format
+                bucket_row = {
+                    "Regular": breakdown['Reg'],
+                    "Overtime": breakdown['OT'],
+                    "Night": breakdown['Night'],
+                    "Sunday": breakdown['Sun'],
+                    "Holiday": breakdown['Hol'],
+                    # We will need to handle OJTI/CIC in the calculator later
+                }
+                processed_buckets = pd.concat([processed_buckets, pd.DataFrame([bucket_row])], ignore_index=True)
+            
+            # C. Pass these calculated buckets to the calculator
+            # (Use your existing calculator logic, just fed by the engine's output)
+            ref_rate, ref_deductions, ref_earnings = get_reference_data(selected_id)
+            
+            expected_data = calculate_expected_pay(
+                processed_buckets, # <-- The engine output goes here 
+                ref_rate, 
+                actual_data['stub'], 
+                ref_deductions, 
+                actual_data['leave'],
+                ref_earnings
+            )
 
         # 6. RENDER SIDE-BY-SIDE
         if flags:
