@@ -45,15 +45,20 @@ with tab_audit:
             if st.button("💾 Calculate"):
                 models.save_timesheet_v2(pe, edited)
                 
-                # A. Run Time Engine
-                buckets = pd.DataFrame()
+                # --- A. Run Time Engine ---
+                # Initialize with columns to be safe
+                buckets = pd.DataFrame(columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "OJTI", "CIC"])
+                
                 for _, row in edited.iterrows():
                     b = logic.calculate_daily_breakdown(row['Date'], row['Start'], row['End'], 
                                                         row['Leave'], row['OJTI'], row['CIC'])
-                    buckets = pd.concat([buckets, pd.DataFrame([{
+                    
+                    # Add row
+                    new_row = pd.DataFrame([{
                         "Regular": b['Reg'], "Overtime": b['OT'], "Night": b['Night'], 
                         "Sunday": b['Sun'], "Holiday": b['Hol'], "OJTI": b['OJTI'], "CIC": b['CIC']
-                    }])], ignore_index=True)
+                    }])
+                    buckets = pd.concat([buckets, new_row], ignore_index=True)
                 
                 # B. Run Pay Engine
                 ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
