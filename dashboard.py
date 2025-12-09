@@ -9,7 +9,42 @@ st.set_page_config(page_title="FAA PayTracker", layout="wide")
 st.markdown(views.get_css(), unsafe_allow_html=True)
 models.setup_database()
 
-tab_audit, tab_graphs, tab_ingest = st.tabs(["🧐 Audit & Time", "📊 Graphs", "📥 Ingestion"])
+tab_audit, tab_graphs, tab_facts, tab_ingest = st.tabs(["🧐 Audit & Time", "📊 Graphs", "ℹ️ Basic Facts", "📥 Ingestion"])
+
+# --- TAB: BASIC FACTS (Schedule Setup) ---
+with tab_facts:
+    st.header("My Standard Schedule")
+    st.info("Define your default shifts here. These times are used to calculate 'Leave' when you work less than scheduled.")
+    
+    # Load current schedule
+    conn = models.get_db()
+    sched_df = pd.read_sql("SELECT * FROM user_schedule ORDER BY day_of_week", conn)
+    conn.close()
+    
+    # Map integers 0-6 to Monday-Sunday for readability
+    days_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
+    sched_df['Day'] = sched_df['day_of_week'].map(days_map)
+    
+    # Reorder columns for the editor
+    sched_df = sched_df[['Day', 'is_workday', 'start_time', 'end_time', 'day_of_week']]
+    
+    edited_sched = st.data_editor(
+        sched_df,
+        hide_index=True,
+        column_config={
+            "day_of_week": None, # Hide the ID column
+            "Day": st.column_config.TextColumn(disabled=True),
+            "is_workday": "Workday?",
+            # Force Military Time Format
+            "start_time": st.column_config.TimeColumn("Std Start", format="HH:mm", step=60),
+            "end_time": st.column_config.TimeColumn("Std End", format="HH:mm", step=60)
+        },
+        disabled=["Day"]
+    )
+    
+    if st.button("💾 Save Standard Schedule"):
+        models.save_user_schedule(edited_sched)
+        st.success("Standard schedule updated!")
 
 with tab_audit:
     st.header("Deep Dive Audit")
@@ -44,35 +79,42 @@ with tab_audit:
         pe = act_data['stub']['period_ending']
 
         # 3. V2 Editor (Start/End Times)
-        with st.expander("📝 Edit Schedule (Time & Attendance)", expanded=True):
+        with st.expander("📝 Edit Schedule (Actual Worked)", expanded=True):
             ts_v2 = models.load_timesheet_v2(pe)
-            edited = st.data_editor(ts_v2, num_rows="fixed", hide_index=True,
-                                    column_config={"Start": st.column_config.TimeColumn(format="HH:mm", step=15),
-                                                   "End": st.column_config.TimeColumn(format="HH:mm", step=15)})
+            
+            edited = st.data_editor(
+                ts_v2, 
+                num_rows="fixed", 
+                hide_index=True,
+                column_config={
+                    "Date": st.column_config.DateColumn(format="MM-DD (ddd)", disabled=True),
+                    # FORCE 24H Format here
+                    "Start": st.column_config.TimeColumn("Act Start", format="HH:mm", step=15),
+                    "End": st.column_config.TimeColumn("Act End", format="HH:mm", step=15),
+                    # We keep Leave TYPE (sick/annual) but remove Leave HOURS
+                    "Leave_Type": st.column_config.SelectboxColumn("Leave Type (if gap)", options=["Annual", "Sick", "Credit", "Comp", "LWOP"]),
+                    "OJTI": st.column_config.NumberColumn("OJTI (Hrs)"),
+                    "CIC": st.column_config.NumberColumn("CIC (Hrs)")
+                }
+            )
             
             if st.button("💾 Calculate"):
                 models.save_timesheet_v2(pe, edited)
                 
                 # Fetch Schedule for Holiday Logic
                 conn = models.get_db()
-                sched_df = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
+                std_sched = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
                 conn.close()
                 
                 # --- A. Run Time Engine ---
                 bucket_rows = []
-                
                 for _, row in edited.iterrows():
+                    # Pass the Standard Schedule to the logic engine
                     b = logic.calculate_daily_breakdown(
-                        row['Date'], row['Start'], row['End'], 
-                        row['Leave'], row['OJTI'], row['CIC'],
-                        schedule_df=sched_df  # Pass the schedule here
+                        row['Date'], row['Start'], row['End'], row['Leave_Type'], 
+                        row['OJTI'], row['CIC'], std_sched
                     )
-                    
-                    bucket_rows.append({
-                        "Regular": b['Reg'], "Overtime": b['OT'], "Night": b['Night'], 
-                        "Sunday": b['Sun'], "Holiday": b['Hol'], "Hol_Leave": b['Hol_Leave'],
-                        "OJTI": b['OJTI'], "CIC": b['CIC']
-                    })
+                    bucket_rows.append(b)
                 
                 # Create DataFrame with all columns
                 buckets = pd.DataFrame(bucket_rows, columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"])
