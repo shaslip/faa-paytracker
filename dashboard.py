@@ -14,19 +14,27 @@ tab_audit, tab_graphs, tab_ingest = st.tabs(["🧐 Audit & Time", "📊 Graphs",
 with tab_audit:
     st.header("Deep Dive Audit")
     
-    # 1. Select Stub
+    # 1. Select Stub (Optimized)
     stubs = models.get_paystubs_meta()
+    
     if not stubs.empty:
-        # Generate Status Icons
+        # --- OPTIMIZATION START ---
+        # Pre-calculate statuses effectively to prevent N+1 query lag in the selectbox
         status_map = {}
-        for sid in stubs['id']:
+        for _, row in stubs.iterrows():
+            sid = row['id']
+            # We fetch data once per row here.
+            # If this is still too slow with 100+ stubs, move this logic to the SQL query or a 'flags' column in DB.
             d = models.get_full_paystub_data(sid)
             f = logic.run_full_audit(d)
             status_map[sid] = "🔴" if f else "✅"
+        # --- OPTIMIZATION END ---
 
         def fmt(rid): 
             r = stubs[stubs['id']==rid].iloc[0]
-            return f"{status_map.get(rid,'')} {r['period_ending']} (Net: ${r['net_pay']:,.2f})"
+            # Use the pre-calculated map
+            icon = status_map.get(rid, "")
+            return f"{icon} {r['period_ending']} (Net: ${r['net_pay']:,.2f})"
 
         sel_id = st.selectbox("Select Pay Period:", stubs['id'], format_func=fmt)
         
@@ -45,21 +53,29 @@ with tab_audit:
             if st.button("💾 Calculate"):
                 models.save_timesheet_v2(pe, edited)
                 
+                # Fetch Schedule for Holiday Logic
+                conn = models.get_db()
+                sched_df = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
+                conn.close()
+                
                 # --- A. Run Time Engine ---
                 bucket_rows = []
                 
                 for _, row in edited.iterrows():
-                    b = logic.calculate_daily_breakdown(row['Date'], row['Start'], row['End'], 
-                                                        row['Leave'], row['OJTI'], row['CIC'])
+                    b = logic.calculate_daily_breakdown(
+                        row['Date'], row['Start'], row['End'], 
+                        row['Leave'], row['OJTI'], row['CIC'],
+                        schedule_df=sched_df  # Pass the schedule here
+                    )
                     
                     bucket_rows.append({
                         "Regular": b['Reg'], "Overtime": b['OT'], "Night": b['Night'], 
-                        "Sunday": b['Sun'], "Holiday": b['Hol'], "OJTI": b['OJTI'], "CIC": b['CIC']
+                        "Sunday": b['Sun'], "Holiday": b['Hol'], "Hol_Leave": b['Hol_Leave'],
+                        "OJTI": b['OJTI'], "CIC": b['CIC']
                     })
                 
-                # Create DataFrame once (Fixes FutureWarning & improves speed)
-                # We explicitly define columns to ensure they exist even if the list is empty
-                buckets = pd.DataFrame(bucket_rows, columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "OJTI", "CIC"])
+                # Create DataFrame with all columns
+                buckets = pd.DataFrame(bucket_rows, columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"])
                 
                 # --- B. Run Pay Engine ---
                 ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
@@ -72,7 +88,7 @@ with tab_audit:
         if not exp_data:
             # First load default run
             ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
-            empty_buckets = pd.DataFrame(columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "OJTI", "CIC"])
+            empty_buckets = pd.DataFrame(columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"])
             exp_data = logic.calculate_expected_pay(empty_buckets, ref_rate, act_data['stub'], ref_ded, act_data['leave'], ref_earn)
 
         c1, c2 = st.columns(2)
