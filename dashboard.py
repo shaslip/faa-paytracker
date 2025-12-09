@@ -66,7 +66,8 @@ with tab_audit:
         if not exp_data:
             # First load default run
             ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
-            exp_data = logic.calculate_expected_pay(pd.DataFrame(), ref_rate, act_data['stub'], ref_ded, act_data['leave'], ref_earn)
+            empty_buckets = pd.DataFrame(columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "OJTI", "CIC"])
+            exp_data = logic.calculate_expected_pay(empty_buckets, ref_rate, act_data['stub'], ref_ded, act_data['leave'], ref_earn)
 
         c1, c2 = st.columns(2)
         with c1:
