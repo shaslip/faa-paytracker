@@ -46,21 +46,22 @@ with tab_audit:
                 models.save_timesheet_v2(pe, edited)
                 
                 # --- A. Run Time Engine ---
-                # Initialize with columns to be safe
-                buckets = pd.DataFrame(columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "OJTI", "CIC"])
+                bucket_rows = []
                 
                 for _, row in edited.iterrows():
                     b = logic.calculate_daily_breakdown(row['Date'], row['Start'], row['End'], 
                                                         row['Leave'], row['OJTI'], row['CIC'])
                     
-                    # Add row
-                    new_row = pd.DataFrame([{
+                    bucket_rows.append({
                         "Regular": b['Reg'], "Overtime": b['OT'], "Night": b['Night'], 
                         "Sunday": b['Sun'], "Holiday": b['Hol'], "OJTI": b['OJTI'], "CIC": b['CIC']
-                    }])
-                    buckets = pd.concat([buckets, new_row], ignore_index=True)
+                    })
                 
-                # B. Run Pay Engine
+                # Create DataFrame once (Fixes FutureWarning & improves speed)
+                # We explicitly define columns to ensure they exist even if the list is empty
+                buckets = pd.DataFrame(bucket_rows, columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "OJTI", "CIC"])
+                
+                # --- B. Run Pay Engine ---
                 ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
                 exp_data = logic.calculate_expected_pay(buckets, ref_rate, act_data['stub'], ref_ded, act_data['leave'], ref_earn)
                 
