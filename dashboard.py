@@ -25,6 +25,9 @@ with tab_facts:
     sched_df['Day'] = sched_df['day_of_week'].map(days_map)
     sched_df = sched_df[['Day', 'start_time', 'end_time', 'day_of_week']]
     
+    # --- REGEX FIX: Allow Empty String (^$) OR Time Format ---
+    time_regex = r"^$|^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
+
     edited_sched = st.data_editor(
         sched_df,
         hide_index=True,
@@ -32,8 +35,8 @@ with tab_facts:
         column_config={
             "day_of_week": None, 
             "Day": st.column_config.TextColumn(disabled=True),
-            "start_time": st.column_config.TextColumn("Std Start", validate="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"),
-            "end_time": st.column_config.TextColumn("Std End", validate="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$")
+            "start_time": st.column_config.TextColumn("Std Start", validate=time_regex),
+            "end_time": st.column_config.TextColumn("Std End", validate=time_regex)
         },
         disabled=["Day"]
     )
@@ -108,6 +111,9 @@ with tab_audit:
         with st.expander("📝 Edit Schedule (Actual Worked)", expanded=True):
             ts_v2 = models.load_timesheet_v2(pe)
             
+            # Use same regex here to allow clearing shifts
+            time_regex = r"^$|^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
+
             edited = st.data_editor(
                 ts_v2, 
                 num_rows="fixed", 
@@ -115,8 +121,8 @@ with tab_audit:
                 width="stretch",
                 column_config={
                     "Date": st.column_config.DateColumn(format="MM-DD (ddd)", disabled=True),
-                    "Start": st.column_config.TextColumn("Act Start", validate="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"),
-                    "End": st.column_config.TextColumn("Act End", validate="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"),
+                    "Start": st.column_config.TextColumn("Act Start", validate=time_regex),
+                    "End": st.column_config.TextColumn("Act End", validate=time_regex),
                     "Leave_Type": st.column_config.SelectboxColumn("Leave Type (if gap)", options=["Annual", "Sick", "Credit", "Comp", "LWOP"]),
                     "OJTI": st.column_config.NumberColumn("OJTI (Hrs)"),
                     "CIC": st.column_config.NumberColumn("CIC (Hrs)")
@@ -146,7 +152,6 @@ with tab_audit:
                 # Pay Engine Setup
                 ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
                 
-                # --- FIX: Create proper Dummy Stub for Projected Mode ---
                 if act_data:
                     stub_meta = act_data['stub']
                     stub_leave = act_data['leave']
@@ -162,7 +167,6 @@ with tab_audit:
                         'remarks': 'PROJECTED ESTIMATE'
                     }
                     stub_leave = pd.DataFrame()
-                # -----------------------------------------------------
 
                 exp_data = logic.calculate_expected_pay(buckets, ref_rate, stub_meta, ref_ded, stub_leave, ref_earn)
                 st.session_state['res'] = exp_data
@@ -175,7 +179,6 @@ with tab_audit:
              ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
              empty_buckets = pd.DataFrame(columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"])
              
-             # Use the same dummy dict here for the initial load
              dummy_stub = {
                 'agency': 'Federal Aviation Administration',
                 'period_ending': pe,
