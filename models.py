@@ -9,60 +9,41 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-# --- Schema Management ---
 def setup_database():
+    """Initializes all tables including V2 timesheets and Schedule."""
     conn = get_db()
     
-    # 1. Master Paystubs
+    # 1. Master Paystubs (Existing)
     conn.execute('''CREATE TABLE IF NOT EXISTS paystubs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        pay_date TEXT UNIQUE,
-        period_ending TEXT,
-        net_pay REAL,
-        gross_pay REAL,
-        total_deductions REAL,
-        agency TEXT,
-        remarks TEXT,
-        file_source TEXT
+        id INTEGER PRIMARY KEY AUTOINCREMENT, pay_date TEXT UNIQUE, period_ending TEXT,
+        net_pay REAL, gross_pay REAL, total_deductions REAL, agency TEXT, remarks TEXT, file_source TEXT
     )''')
-
-    # 2. Earnings, Deductions, Leave (Standard Tables)
-    # (Schema omitted for brevity - assumes standard structure from ingest.py)
     
-    # 3. Schedule & Timesheets (New Features)
+    # 2. Schedule (Default Template)
     conn.execute('''CREATE TABLE IF NOT EXISTS user_schedule (
-        day_of_week INTEGER PRIMARY KEY, 
-        start_time TEXT,
-        end_time TEXT,
-        is_workday BOOLEAN
+        day_of_week INTEGER PRIMARY KEY, start_time TEXT, end_time TEXT, is_workday BOOLEAN
     )''')
     
+    # Seed Schedule if empty
+    if pd.read_sql("SELECT count(*) as c FROM user_schedule", conn).iloc[0]['c'] == 0:
+        for i in range(7):
+            is_work = i < 5 
+            conn.execute("INSERT INTO user_schedule VALUES (?, ?, ?, ?)", 
+                         (i, "07:00" if is_work else None, "15:00" if is_work else None, is_work))
+
+    # 3. Timesheet V2 (Start/End Times)
     conn.execute('''CREATE TABLE IF NOT EXISTS timesheet_entry_v2 (
-        period_ending TEXT,
-        day_date TEXT,
-        start_time TEXT,
-        end_time TEXT,
-        leave_hours REAL DEFAULT 0,
-        ojti_hours REAL DEFAULT 0,
-        cic_hours REAL DEFAULT 0,
+        period_ending TEXT, day_date TEXT, start_time TEXT, end_time TEXT,
+        leave_hours REAL DEFAULT 0, ojti_hours REAL DEFAULT 0, cic_hours REAL DEFAULT 0,
         UNIQUE(period_ending, day_date)
     )''')
     
-    # Seed default schedule if empty
-    if pd.read_sql("SELECT count(*) as c FROM user_schedule", conn).iloc[0]['c'] == 0:
-        for i in range(7):
-            is_work = i < 5 # Mon-Fri
-            conn.execute("INSERT INTO user_schedule VALUES (?, ?, ?, ?)", 
-                         (i, "07:00" if is_work else None, "15:00" if is_work else None, is_work))
-        conn.commit()
-    
+    conn.commit()
     conn.close()
 
-# --- Data Access Objects (DAO) ---
-
-def get_paystubs_list():
+def get_paystubs_meta():
     conn = get_db()
-    df = pd.read_sql("SELECT id, pay_date, period_ending, net_pay, file_source FROM paystubs ORDER BY pay_date DESC", conn)
+    df = pd.read_sql("SELECT id, pay_date, period_ending, net_pay, gross_pay, file_source FROM paystubs ORDER BY pay_date DESC", conn)
     conn.close()
     return df
 
@@ -110,12 +91,9 @@ def load_timesheet_v2(period_ending):
             if def_row is not None and def_row['is_workday']:
                 s = datetime.strptime(def_row['start_time'], "%H:%M").time() if def_row['start_time'] else None
                 e = datetime.strptime(def_row['end_time'], "%H:%M").time() if def_row['end_time'] else None
-                data.append({
-                    "Date": d, "Start": s, "End": e, "Leave": 0.0, "OJTI": 0.0, "CIC": 0.0
-                })
+                data.append({"Date": d, "Start": s, "End": e, "Leave": 0.0, "OJTI": 0.0, "CIC": 0.0})
             else:
                 data.append({"Date": d, "Start": None, "End": None, "Leave": 0.0, "OJTI": 0.0, "CIC": 0.0})
-
     return pd.DataFrame(data)
 
 def save_timesheet_v2(period_ending, df):
@@ -135,9 +113,8 @@ def save_timesheet_v2(period_ending, df):
     conn.close()
 
 def get_reference_data(current_stub_id):
-    """Finds best available rates/deductions (History Fallback Logic)."""
+    """Finds best available rates/deductions (History Fallback Logic for Shutdowns)."""
     conn = get_db()
-    # Try Current
     curr_earnings = pd.read_sql("SELECT * FROM earnings WHERE paystub_id = ?", conn, params=(current_stub_id,))
     reg_rows = curr_earnings[curr_earnings['type'].str.contains('Regular', case=False, na=False)]
     
@@ -147,7 +124,6 @@ def get_reference_data(current_stub_id):
         conn.close()
         return base_rate, deductions, curr_earnings
     
-    # Fallback History
     last_good = pd.read_sql("SELECT paystub_id, rate FROM earnings WHERE type LIKE '%Regular%' AND rate > 0 ORDER BY id DESC LIMIT 1", conn)
     if not last_good.empty:
         ref_id = int(last_good.iloc[0]['paystub_id'])
