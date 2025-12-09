@@ -7,6 +7,7 @@ def run_full_audit(data):
     flags = {}
     EXEMPT = ["Admin", "Change of Station Leave", "Time Off Award", "Gov Shutdown-Excepted"]
     
+    # User Note: 8.50 means 8 hours 50 minutes for Leave
     def to_min(v): 
         if v is None: return 0
         h = int(v); m = round((v-h)*100)
@@ -33,14 +34,65 @@ def run_full_audit(data):
     return flags
 
 # --- 2. Time Engine (V2) ---
-def calculate_daily_breakdown(date_str, start_time, end_time, leave_hours, ojti, cic):
-    if not start_time or not end_time:
-        return {'Reg': 0, 'OT': 0, 'Night': 0, 'Sun': 0, 'Hol': 0, 'OJTI': ojti, 'CIC': cic}
 
-    start_dt = datetime.combine(datetime.strptime(date_str, "%Y-%m-%d").date(), start_time)
-    end_dt = datetime.combine(datetime.strptime(date_str, "%Y-%m-%d").date(), end_time)
+def get_observed_holiday(date_obj, schedule_df):
+    """
+    Determines the 'In-Lieu-Of' date for a given holiday based on RDOs (ATC Slide Rule).
+    schedule_df must be indexed by day_of_week (0=Mon, 6=Sun) with 'is_workday' bool.
+    """
+    wd = date_obj.weekday()
+    
+    # 1. If holiday falls on a Workday, that is the holiday.
+    if schedule_df.loc[wd, 'is_workday']:
+        return date_obj
+
+    # 2. If holiday falls on RDO:
+    # Rule: If Sunday (6), slide forward to next workday. 
+    #       If any other day (usually Sat), slide back to previous workday.
+    offset = 1
+    direction = 1 if wd == 6 else -1
+    
+    while True:
+        check_date = date_obj + timedelta(days=(offset * direction))
+        # If we slid into a workday, that's the observed holiday
+        if schedule_df.loc[check_date.weekday(), 'is_workday']:
+            return check_date
+        offset += 1
+
+def calculate_daily_breakdown(date_str, start_time, end_time, leave_hours, ojti, cic, schedule_df=None):
+    # Standard Federal Holidays
+    HOLIDAYS = ["2024-12-25", "2025-01-01", "2025-01-20", "2025-02-17", "2025-05-26", 
+                "2025-06-19", "2025-07-04", "2025-09-01", "2025-10-13", "2025-11-11", 
+                "2025-11-27", "2025-12-25"]
+    
+    current_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    
+    # Determine if this specific date is an Observed Holiday
+    is_observed_holiday = False
+    
+    if schedule_df is not None:
+        for h_str in HOLIDAYS:
+            h_date = datetime.strptime(h_str, "%Y-%m-%d").date()
+            obs_date = get_observed_holiday(h_date, schedule_df)
+            if obs_date == current_date:
+                is_observed_holiday = True
+                break
+    elif date_str in HOLIDAYS:
+        is_observed_holiday = True
+
+    # --- Calculation ---
+    # If no start/end time, assume RDO or Leave
+    if not start_time or not end_time:
+        # If it's an observed holiday and you didn't work, you get 8h Holiday Leave (Paid)
+        hol_leave = 8.0 if is_observed_holiday else 0.0
+        return {'Reg': 0, 'OT': 0, 'Night': 0, 'Sun': 0, 'Hol': 0, 'Hol_Leave': hol_leave, 'OJTI': 0, 'CIC': 0}
+
+    start_dt = datetime.combine(current_date, start_time)
+    end_dt = datetime.combine(current_date, end_time)
     if end_dt <= start_dt: end_dt += timedelta(days=1)
 
+    # Note: verify if total_seconds logic matches "8.50 = 8h 50m" for worked time. 
+    # Currently using standard decimal (8.5 = 8h 30m).
     total_dur = (end_dt - start_dt).total_seconds() / 3600.0
     worked = max(0, total_dur - leave_hours)
     
@@ -61,28 +113,40 @@ def calculate_daily_breakdown(date_str, start_time, end_time, leave_hours, ojti,
         sun = reg
         
     # Holiday Logic
-    HOLIDAYS = ["2024-12-25", "2025-01-01", "2025-01-20", "2025-02-17", "2025-05-26", "2025-06-19", "2025-07-04", "2025-09-01", "2025-10-13", "2025-11-11", "2025-11-27", "2025-12-25"]
-    hol = 0.0
-    if date_str in HOLIDAYS:
-        hol = reg; reg = 0.0
+    hol_worked = 0.0
+    hol_leave = 0.0
+    
+    if is_observed_holiday:
+        # If you work the holiday, you get Reg Pay (counted above) AND Holiday Premium (Hol)
+        hol_worked = reg 
+        # You do NOT get Hol_Leave (free leave) if you work.
         
-    return {'Reg': reg, 'OT': ot, 'Night': night, 'Sun': sun, 'Hol': hol, 'OJTI': ojti, 'CIC': cic}
+    return {'Reg': reg, 'OT': ot, 'Night': night, 'Sun': sun, 'Hol': hol_worked, 'Hol_Leave': hol_leave, 'OJTI': ojti, 'CIC': cic}
 
 # --- 3. Paycheck Calculator (FLSA Weighted Average) ---
 def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, actual_leave, ref_earnings):
     # Sum buckets
-    t_reg = buckets_df['Regular'].sum(); t_ot = buckets_df['Overtime'].sum()
-    t_night = buckets_df['Night'].sum(); t_sun = buckets_df['Sunday'].sum()
-    t_hol = buckets_df['Holiday'].sum(); t_ojti = buckets_df['OJTI'].sum(); t_cic = buckets_df['CIC'].sum()
+    t_reg = buckets_df['Regular'].sum()
+    t_ot = buckets_df['Overtime'].sum()
+    t_night = buckets_df['Night'].sum()
+    t_sun = buckets_df['Sunday'].sum()
+    t_hol_work = buckets_df['Holiday'].sum() # Premium
+    t_hol_leave = buckets_df.get('Hol_Leave', pd.Series(0)).sum() if 'Hol_Leave' in buckets_df else 0.0
+    t_ojti = buckets_df['OJTI'].sum()
+    t_cic = buckets_df['CIC'].sum()
 
-    # 1. Base Amounts
-    amt_reg = round(t_reg * base_rate, 2)
+    # 1. Base Amounts (Reg + Holiday Leave are both paid at Base Rate)
+    # Note: 'Regular' bucket usually implies worked hours. Holiday Leave adds to the base pay hours.
+    amt_reg = round((t_reg + t_hol_leave) * base_rate, 2)
+    
     amt_true_ot = round(t_ot * base_rate, 2) if t_ot > 0 else 0.0
     
     # 2. Differentials
     r_night = round(base_rate * 0.10, 2); amt_night = round(t_night * r_night, 2)
     r_sun = round(base_rate * 0.25, 2); amt_sun = round(t_sun * r_sun, 2)
-    amt_hol = round(t_hol * base_rate, 2)
+    
+    # Holiday Worked Premium (Usually 100% of base rate, so effectively 2x total)
+    amt_hol = round(t_hol_work * base_rate, 2)
     
     # 3. Dynamic Diffs (OJTI/CIC/CIP)
     r_ojti = round(base_rate * 0.10, 2); amt_ojti = round(t_ojti * r_ojti, 2)
@@ -98,15 +162,17 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
              hist_reg = reg_row.iloc[0]['amount_current']
              if hist_reg > 0:
                  factor = hist_cip / hist_reg
+                 # CIP applies to Basic Pay (Reg + Hol Leave)
                  amt_cip = round(amt_reg * factor, 2)
                  r_cip = round(base_rate * factor, 2)
 
     # 4. FLSA Calculation (Weighted Average)
     amt_flsa = 0.0; r_flsa = 0.0
     if t_ot > 0:
-        # Numerator: Base + True OT + Diffs + CIP + OJTI + CIC
-        remun = amt_reg + amt_true_ot + amt_night + amt_sun + amt_cip + amt_ojti + amt_cic
-        hrs = t_reg + t_ot
+        # Numerator: Base (Reg+HolLeave) + True OT + Diffs + CIP + OJTI + CIC
+        # Note: Holiday Premium is included in FLSA calc
+        remun = amt_reg + amt_true_ot + amt_night + amt_sun + amt_hol + amt_cip + amt_ojti + amt_cic
+        hrs = t_reg + t_hol_leave + t_ot
         if hrs > 0:
             rrp = remun / hrs
             r_flsa = round(rrp * 0.5, 2)
@@ -119,14 +185,16 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
 
     # 6. Build Rows
     rows = []
-    if t_reg: rows.append(["Regular", base_rate, t_reg, amt_reg])
-    if amt_cip: rows.append(["Controller Incentive Pay", r_cip, t_reg, amt_cip])
+    if (t_reg + t_hol_leave) > 0: 
+        rows.append(["Regular / Holiday Leave", base_rate, (t_reg + t_hol_leave), amt_reg])
+        
+    if amt_cip: rows.append(["Controller Incentive Pay", r_cip, (t_reg + t_hol_leave), amt_cip])
     if t_ot:
         rows.append(["FLSA Premium", r_flsa, t_ot, amt_flsa])
         rows.append(["True Overtime", base_rate, t_ot, amt_true_ot])
     if t_night: rows.append(["Night Differential", r_night, t_night, amt_night])
     if t_sun: rows.append(["Sunday Premium", r_sun, t_sun, amt_sun])
-    if t_hol: rows.append(["Holiday Worked", base_rate, t_hol, amt_hol])
+    if t_hol_work: rows.append(["Holiday Worked", base_rate, t_hol_work, amt_hol])
     if t_ojti: rows.append(["OJTI", r_ojti, t_ojti, amt_ojti])
     if t_cic: rows.append(["CIC", r_cic, t_cic, amt_cic])
     
