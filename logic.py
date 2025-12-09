@@ -126,7 +126,6 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
         worked_hours = (e_act - s_act).total_seconds() / 3600.0
         
         # Night Differential Logic (18:00 - 06:00)
-        # Scan every 15 mins
         cursor = s_act
         while cursor < e_act:
             if cursor.hour >= 18 or cursor.hour < 6: 
@@ -134,33 +133,45 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
             cursor += timedelta(minutes=15)
             
         # Sunday Premium Logic (Touch Rule)
-        # If any part of the shift touches Sunday
         if s_act.weekday() == 6 or e_act.weekday() == 6:
-            # Sunday premium is usually capped at 8 hours (Basic Pay hours)
             sun = min(8.0, worked_hours)
 
     # 4. The Gap Analysis (Leave Calculation)
     leave_hours_charged = 0.0
     hol_leave_hours = 0.0
     
+    # Only calculate gaps if this is a SCHEDULED Workday
     if is_workday:
-        # Normal Day: First 8 are Reg, rest is OT
+        gap = max(0.0, std_hours - worked_hours)
+        
+        if gap > 0:
+            if is_observed_holiday:
+                # If observed holiday and you didn't work (or worked partial), 
+                # the gap is covered by Holiday Leave (Paid, Free).
+                hol_leave_hours = gap
+            else:
+                # Normal workday gap -> Charge user leave (Annual/Sick/etc)
+                leave_hours_charged = gap
+    
+    # 5. Buckets for Pay Calculation
+    reg = 0.0
+    ot = 0.0
+    
+    if is_workday:
+        # Normal Workday or Observed Holiday:
+        # First 8 hours are Regular Pay (or covered by Hol Leave if gap)
+        # Anything over 8 is OT.
         reg = min(8.0, worked_hours)
         ot = max(0.0, worked_hours - 8.0)
     else:
-        # Day Off (6th Shift): ALL hours are OT
+        # RDO (Regular Day Off):
+        # If you work on an RDO, ALL hours are Overtime.
+        # (Even if this was the 'Calendar Holiday', the slide rule moved the holiday status away)
         reg = 0.0
         ot = worked_hours
 
-    # 5. Buckets for Pay Calculation
-    # Regular Pay is capped at 8 hours usually, but FLSA overtime starts after 8 in a day (typically) or 40 in a week.
-    # For daily breakdown, we split Reg/OT.
-    
-    reg = min(8.0, worked_hours)
-    ot = max(0.0, worked_hours - 8.0)
-    
     # Holiday Worked Premium
-    # You get this for working on the Observed Holiday (usually capped at 8 hrs)
+    # You get this ONLY if working on the OBSERVED Holiday.
     hol_worked_premium = 0.0
     if is_observed_holiday and worked_hours > 0:
         hol_worked_premium = min(8.0, worked_hours)
@@ -192,7 +203,6 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     t_cic = buckets_df['CIC'].sum()
 
     # 1. Base Amounts (Reg + Holiday Leave are both paid at Base Rate)
-    # Note: 'Regular' bucket usually implies worked hours. Holiday Leave adds to the base pay hours.
     amt_reg = round(t_reg * base_rate, 2)
     amt_hol_leave = round(t_hol_leave * base_rate, 2)    
     amt_true_ot = round(t_ot * base_rate, 2) if t_ot > 0 else 0.0
@@ -201,7 +211,7 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     r_night = round(base_rate * 0.10, 2); amt_night = round(t_night * r_night, 2)
     r_sun = round(base_rate * 0.25, 2); amt_sun = round(t_sun * r_sun, 2)
     
-    # Holiday Worked Premium (Usually 100% of base rate, so effectively 2x total)
+    # Holiday Worked Premium (100% of base rate)
     amt_hol = round(t_hol_work * base_rate, 2)
     
     # 3. Dynamic Diffs (OJTI/CIC/CIP)
@@ -211,12 +221,16 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     # CIP Logic
     amt_cip = 0.0; r_cip = 0.0
     if not ref_earnings.empty:
-         # ... (existing lookup code) ...
-         if hist_reg > 0:
-             factor = hist_cip / hist_reg
-             # CIP applies to Basic Pay (Reg + Holiday Leave)
-             amt_cip = round((amt_reg + amt_hol_leave) * factor, 2)
-             r_cip = round(base_rate * factor, 2)
+         cip_row = ref_earnings[ref_earnings['type'].str.contains('Controller Incentive', case=False)]
+         reg_row = ref_earnings[ref_earnings['type'].str.contains('Regular', case=False)]
+         if not cip_row.empty and not reg_row.empty:
+             hist_cip = cip_row.iloc[0]['amount_current']
+             hist_reg = reg_row.iloc[0]['amount_current']
+             if hist_reg > 0:
+                 factor = hist_cip / hist_reg
+                 # CIP applies to Basic Pay (Reg + Holiday Leave)
+                 amt_cip = round((amt_reg + amt_hol_leave) * factor, 2)
+                 r_cip = round(base_rate * factor, 2)
 
     # 4. FLSA Calculation (Weighted Average)
     amt_flsa = 0.0; r_flsa = 0.0
