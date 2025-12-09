@@ -31,19 +31,17 @@ with tab_facts:
     edited_sched = st.data_editor(
         sched_df,
         hide_index=True,
-        width="stretch",  # <--- FIXED: Replaces use_container_width=True
+        width="stretch",
         column_config={
             "day_of_week": None, 
             "Day": st.column_config.TextColumn(disabled=True),
-            # FORCE MILITARY TIME via Regex Validation
+            # FORCE MILITARY TIME via Regex Validation (Removed placeholder)
             "start_time": st.column_config.TextColumn(
                 "Std Start", 
-                placeholder="07:00",
                 validate="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$" 
             ),
             "end_time": st.column_config.TextColumn(
                 "Std End", 
-                placeholder="15:00",
                 validate="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
             )
         },
@@ -92,18 +90,16 @@ with tab_audit:
                 ts_v2, 
                 num_rows="fixed", 
                 hide_index=True,
-                width="stretch", # <--- ADDED for consistency
+                width="stretch",
                 column_config={
                     "Date": st.column_config.DateColumn(format="MM-DD (ddd)", disabled=True),
-                    # FORCE MILITARY TIME via Regex
+                    # FORCE MILITARY TIME via Regex (Removed placeholder)
                     "Start": st.column_config.TextColumn(
                         "Act Start", 
-                        placeholder="07:00",
                         validate="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
                     ),
                     "End": st.column_config.TextColumn(
                         "Act End", 
-                        placeholder="15:00",
                         validate="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
                     ),
                     "Leave_Type": st.column_config.SelectboxColumn("Leave Type (if gap)", options=["Annual", "Sick", "Credit", "Comp", "LWOP"]),
@@ -157,7 +153,7 @@ with tab_audit:
             st.markdown(views.render_paystub_html(act_data, act_flags, mode="actual"), unsafe_allow_html=True)
     else:
         st.warning("No data.")
-
+    
 with tab_graphs:
     st.header("Financial Trends")
     stubs = models.get_paystubs_meta()
