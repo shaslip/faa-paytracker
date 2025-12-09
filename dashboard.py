@@ -184,10 +184,16 @@ def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta, ref_deduct
     total_sun = timesheet_df['Sunday'].sum()
     total_hol = timesheet_df['Holiday'].sum()
 
-    # --- 1. BASE PAY ---
+    # --- 1. BASE & STRAIGHT TIME PAY ---
+    # Regular Pay (for first 80 hours usually)
     amt_reg = round(total_reg * base_rate, 2)
+    
+    # True Overtime (The straight-time cash for OT hours)
+    amt_true_ot = 0.0
+    if total_ot > 0:
+        amt_true_ot = round(total_ot * base_rate, 2)
 
-    # --- 2. DIFFERENTIALS (Night/Sun) ---
+    # --- 2. DIFFERENTIALS ---
     rate_night = round(base_rate * 0.10, 2)
     amt_night = round(total_night * rate_night, 2)
 
@@ -197,11 +203,11 @@ def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta, ref_deduct
     amt_hol = round(total_hol * base_rate, 2)
 
     # --- 3. CONTROLLER INCENTIVE PAY (CIP) ---
-    # Logic: Find historic CIP %, apply to current Base
     amt_cip = 0.0
     rate_cip = 0.0
     
     if not ref_earnings.empty:
+        # Find historical CIP percentage
         cip_row = ref_earnings[ref_earnings['type'].str.contains('Controller Incentive', case=False)]
         reg_row = ref_earnings[ref_earnings['type'].str.contains('Regular', case=False)]
         
@@ -210,58 +216,54 @@ def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta, ref_deduct
             hist_reg_amt = reg_row.iloc[0]['amount_current']
             
             if hist_reg_amt > 0:
-                # Calculate the percentage (e.g., 0.10 for 10%)
                 cip_factor = hist_cip_amt / hist_reg_amt
-                
-                # Apply to current Projected Base
+                # Apply factor to CURRENT Projected Base Pay
                 amt_cip = round(amt_reg * cip_factor, 2)
-                rate_cip = round(base_rate * cip_factor, 2) # Est. hourly impact
+                rate_cip = round(base_rate * cip_factor, 2)
 
-    # --- 4. FLSA CALCULATION (The Complex Part) ---
-    amt_true_ot = 0.0
+    # --- 4. FLSA CALCULATION (Weighted Average Method) ---
     amt_flsa = 0.0
     rate_flsa = 0.0
 
     if total_ot > 0:
-        # A. True Overtime (Straight Time)
-        amt_true_ot = round(total_ot * base_rate, 2)
-
-        # B. FLSA Premium (Half of "Regular Rate")
-        # Total Remuneration includes Base + Night + Sunday + CIP
-        total_remuneration = amt_reg + amt_night + amt_sun + amt_cip
+        # Numerator: Total "Straight Time" Remuneration
+        # (Base Pay + OT Straight Time + Night + Sunday + CIP)
+        total_remuneration = amt_reg + amt_true_ot + amt_night + amt_sun + amt_cip
         
-        # Total Hours includes Regular + Overtime
+        # Denominator: Total Hours Actually Worked
         total_hours = total_reg + total_ot
         
         if total_hours > 0:
-            # The blended "Regular Rate"
+            # 1. Calculate Regular Rate of Pay (RRP)
             regular_rate = total_remuneration / total_hours
             
-            # FLSA Premium is 50% of that blended rate
+            # 2. FLSA Premium is 50% of RRP
             rate_flsa = round(regular_rate * 0.5, 2)
+            
+            # 3. Calculate Final Premium Amount
             amt_flsa = round(total_ot * rate_flsa, 2)
 
+    # --- 5. GROSS & NET ---
     gross_pay = amt_reg + amt_true_ot + amt_flsa + amt_night + amt_sun + amt_hol + amt_cip
 
-    # --- 5. DEDUCTIONS ---
     total_deductions = 0.0
     if not ref_deductions.empty:
         total_deductions = ref_deductions['amount_current'].sum()
     
     net_pay = gross_pay - total_deductions
 
-    # --- 6. BUILD ROWS ---
+    # --- 6. BUILD EARNINGS TABLE ---
     earnings_rows = []
     
     # Regular
     if total_reg > 0: 
         earnings_rows.append(["Regular", base_rate, total_reg, amt_reg])
         
-    # CIP (Insert after Regular)
+    # CIP
     if amt_cip > 0:
         earnings_rows.append(["Controller Incentive Pay", rate_cip, total_reg, amt_cip])
         
-    # Overtime
+    # Overtime (Showing the Calculated Rate now)
     if total_ot > 0:
         earnings_rows.append(["FLSA Premium", rate_flsa, total_ot, amt_flsa])
         earnings_rows.append(["True Overtime", base_rate, total_ot, amt_true_ot])
@@ -305,7 +307,7 @@ def calculate_expected_pay(timesheet_df, base_rate, actual_stub_meta, ref_deduct
         'gross_pay': gross_pay,
         'total_deductions': total_deductions, 
         'net_pay': net_pay, 
-        'remarks': "GENERATED FROM USER TIMESHEET\n(FLSA includes Diffs/CIP)",
+        'remarks': "GENERATED FROM USER TIMESHEET\n(FLSA = (Base+OT+Diffs+CIP)/TotalHrs * 0.5)",
         'file_source': 'GENERATED'
     }
 
