@@ -19,13 +19,13 @@ def render_paystub_html(data, flags=None, mode="actual"):
         if fid and fid in flags: return f'<span class="audit-error" title="{flags[fid]}">{txt}</span>'
         return txt
 
+    # We build a list of strings
     parts = []
-    # Compact HTML to avoid Markdown parsing issues
+    
     parts.append('<div class="stub-wrapper"><div id="elsInfoTable">')
     parts.append('<table class="table els-table" cellpadding="0" cellspacing="0"><tbody>')
     
     # --- HEADER SECTION ---
-    # Col-6: Agency | Col-3: Period Ending | Col-3: Net Pay
     parts.append(f'''
     <tr>
         <td colspan="6" rowspan="2" class="col-6">
@@ -45,7 +45,7 @@ def render_paystub_html(data, flags=None, mode="actual"):
     </tr>
     ''')
 
-    # --- SUMMARY TABLE (Nested) ---
+    # --- SUMMARY TABLE ---
     parts.append(f'''
     <tr>
         <td colspan="5" class="no-margin-padding">
@@ -60,7 +60,7 @@ def render_paystub_html(data, flags=None, mode="actual"):
     </tr>
     ''')
 
-    # --- EARNINGS SECTION ---
+    # --- EARNINGS ---
     parts.append('<tr><td colspan="12" class="blue"><span class="text-align-center cell-title-lg">Earnings</span></td></tr>')
     parts.append('<tr><td colspan="12"><table class="table no-border no-margin-padding">')
     parts.append('<tr><th class="col-5">Type</th><th class="col-1 text-align-right">Rate</th><th class="col-1 text-align-right">Hours</th><th class="col-1 text-align-right">Current</th><th class="col-1 text-align-right">YTD</th></tr>')
@@ -78,7 +78,7 @@ def render_paystub_html(data, flags=None, mode="actual"):
             ''')
     parts.append('</table></td></tr>')
 
-    # --- DEDUCTIONS SECTION ---
+    # --- DEDUCTIONS ---
     if not data['deductions'].empty:
         parts.append('<tr><td colspan="12" class="blue"><span class="text-align-center cell-title-lg">Deductions</span></td></tr>')
         parts.append('<tr><td colspan="12"><table class="table no-border no-margin-padding">')
@@ -94,7 +94,7 @@ def render_paystub_html(data, flags=None, mode="actual"):
              ''')
         parts.append('</table></td></tr>')
 
-    # --- LEAVE SECTION ---
+    # --- LEAVE ---
     if not data['leave'].empty:
         parts.append('<tr><td colspan="12" class="blue"><span class="text-align-center cell-title-lg">Leave</span></td></tr>')
         parts.append('<tr><td colspan="12"><table class="table no-border no-margin-padding">')
@@ -119,4 +119,7 @@ def render_paystub_html(data, flags=None, mode="actual"):
         parts.append(f'<tr><td colspan="12" class="blue"><span class="text-align-center cell-title-lg">Remarks</span></td></tr><tr><td colspan="12" style="padding:10px"><span style="font-family:monospace">{rem}</span></td></tr>')
 
     parts.append('</tbody></table></div></div>')
-    return "".join(parts)
+    
+    # JOIN AND STRIP WHITESPACE TO PREVENT MARKDOWN CODE BLOCKS
+    final_html = "".join(parts)
+    return final_html.replace('\n', '').replace('    ', '')
