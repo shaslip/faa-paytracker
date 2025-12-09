@@ -81,7 +81,11 @@ def get_pay_period_dates(period_ending_str):
 
 def load_timesheet_v2(period_ending):
     conn = get_db()
+    # 1. Get the Standard Schedule (Basic Facts)
+    # We use this to populate defaults if no specific entry exists for a day
     defaults = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
+    
+    # 2. Get Saved Actuals for this specific pay period
     saved = pd.read_sql("SELECT * FROM timesheet_entry_v2 WHERE period_ending = ?", conn, params=(period_ending,))
     conn.close()
     
@@ -91,23 +95,51 @@ def load_timesheet_v2(period_ending):
     for d in dates:
         dt = datetime.strptime(d, "%Y-%m-%d")
         day_idx = dt.weekday()
+        
+        # Check if we have a saved entry for this specific date
         row = saved[saved['day_date'] == d] if not saved.empty else pd.DataFrame()
         
         if not row.empty:
-            s = datetime.strptime(row.iloc[0]['start_time'], "%H:%M").time() if row.iloc[0]['start_time'] else None
-            e = datetime.strptime(row.iloc[0]['end_time'], "%H:%M").time() if row.iloc[0]['end_time'] else None
+            # --- USE SAVED DATA ---
+            r = row.iloc[0]
+            s = datetime.strptime(r['start_time'], "%H:%M").time() if r['start_time'] else None
+            e = datetime.strptime(r['end_time'], "%H:%M").time() if r['end_time'] else None
+            
             data.append({
-                "Date": d, "Start": s, "End": e,
-                "Leave": row.iloc[0]['leave_hours'], "OJTI": row.iloc[0]['ojti_hours'], "CIC": row.iloc[0]['cic_hours']
+                "Date": d,
+                "Start": s,
+                "End": e,
+                "Leave_Type": r['leave_type'], # Can be None
+                "OJTI": r['ojti_hours'],
+                "CIC": r['cic_hours']
             })
         else:
+            # --- USE STANDARD SCHEDULE DEFAULTS ---
             def_row = defaults.loc[day_idx] if day_idx in defaults.index else None
+            
             if def_row is not None and def_row['is_workday']:
+                # Pre-fill with Standard Times
                 s = datetime.strptime(def_row['start_time'], "%H:%M").time() if def_row['start_time'] else None
                 e = datetime.strptime(def_row['end_time'], "%H:%M").time() if def_row['end_time'] else None
-                data.append({"Date": d, "Start": s, "End": e, "Leave": 0.0, "OJTI": 0.0, "CIC": 0.0})
+                data.append({
+                    "Date": d, 
+                    "Start": s, 
+                    "End": e, 
+                    "Leave_Type": None, # Default to no leave
+                    "OJTI": 0.0, 
+                    "CIC": 0.0
+                })
             else:
-                data.append({"Date": d, "Start": None, "End": None, "Leave": 0.0, "OJTI": 0.0, "CIC": 0.0})
+                # Non-workday default (RDO)
+                data.append({
+                    "Date": d, 
+                    "Start": None, 
+                    "End": None, 
+                    "Leave_Type": None, 
+                    "OJTI": 0.0, 
+                    "CIC": 0.0
+                })
+                
     return pd.DataFrame(data)
 
 def save_timesheet_v2(period_ending, df):
