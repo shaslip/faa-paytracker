@@ -51,18 +51,15 @@ with tab_audit:
     stubs = models.get_paystubs_meta()
     
     # --- LOGIC: Predict Current/Next Period ---
-    # We find the last known period ending and add 14 days
     next_pe = None
     if not stubs.empty:
-        # Sort just in case
         stubs = stubs.sort_values('period_ending', ascending=False)
         last_pe_str = stubs.iloc[0]['period_ending']
         last_dt = datetime.strptime(last_pe_str, "%Y-%m-%d")
         next_dt = last_dt + timedelta(days=14)
         next_pe = next_dt.strftime("%Y-%m-%d")
         
-        # Create a "Projected" row and attach it to the top of the dataframe
-        # We use ID = -1 to signal it's a future/projected stub
+        # Create a "Projected" row
         future_row = pd.DataFrame([{
             'id': -1, 
             'pay_date': 'Pending', 
@@ -76,13 +73,11 @@ with tab_audit:
     if not stubs.empty:
         # Pre-calculate statuses
         status_map = {}
-        # Status for the Projected row
         status_map[-1] = "📅" 
         
         for _, row in stubs.iterrows():
             sid = row['id']
-            if sid == -1: continue # Skip the fake one
-            
+            if sid == -1: continue 
             d = models.get_full_paystub_data(sid)
             f = logic.run_full_audit(d)
             status_map[sid] = "🔴" if f else "✅"
@@ -90,7 +85,6 @@ with tab_audit:
         def fmt(rid): 
             if rid == -1:
                 return f"{status_map.get(rid)} Current (Projected): {next_pe}"
-            
             r = stubs[stubs['id']==rid].iloc[0]
             icon = status_map.get(rid, "")
             return f"{icon} {r['period_ending']} (Net: ${r['net_pay']:,.2f})"
@@ -103,7 +97,7 @@ with tab_audit:
             pe = next_pe
             act_data = None
             act_flags = {}
-            st.info(f"You are editing the current pay period ({pe}). No official paystub exists yet, so we are using your last known pay rates for estimates.")
+            st.info(f"You are editing the current pay period ({pe}). We are using your last known pay rates for estimates.")
         else:
             # ACTUAL MODE
             act_data = models.get_full_paystub_data(sel_id)
@@ -149,14 +143,27 @@ with tab_audit:
                 
                 buckets = pd.DataFrame(bucket_rows, columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"])
                 
-                # Pay Engine (Uses -1 or ID)
-                # Note: models.get_reference_data(-1) falls back to history automatically
+                # Pay Engine Setup
                 ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
                 
-                # For Projected, we need dummy 'act_data' structures to prevent crashes in the calculator
-                stub_meta = act_data['stub'] if act_data else {'gross_pay':0, 'net_pay':0, 'total_deductions':0}
-                stub_leave = act_data['leave'] if act_data else pd.DataFrame()
-                
+                # --- FIX: Create proper Dummy Stub for Projected Mode ---
+                if act_data:
+                    stub_meta = act_data['stub']
+                    stub_leave = act_data['leave']
+                else:
+                    # Robust dummy for projections
+                    stub_meta = {
+                        'agency': 'Federal Aviation Administration',
+                        'period_ending': pe,
+                        'pay_date': 'Estimated',
+                        'gross_pay': 0.0,
+                        'net_pay': 0.0,
+                        'total_deductions': 0.0,
+                        'remarks': 'PROJECTED ESTIMATE'
+                    }
+                    stub_leave = pd.DataFrame()
+                # -----------------------------------------------------
+
                 exp_data = logic.calculate_expected_pay(buckets, ref_rate, stub_meta, ref_ded, stub_leave, ref_earn)
                 st.session_state['res'] = exp_data
 
@@ -167,7 +174,17 @@ with tab_audit:
         if not exp_data and sel_id == -1:
              ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
              empty_buckets = pd.DataFrame(columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"])
-             exp_data = logic.calculate_expected_pay(empty_buckets, ref_rate, {'gross_pay':0, 'net_pay':0, 'total_deductions':0}, ref_ded, pd.DataFrame(), ref_earn)
+             
+             # Use the same dummy dict here for the initial load
+             dummy_stub = {
+                'agency': 'Federal Aviation Administration',
+                'period_ending': pe,
+                'pay_date': 'Estimated',
+                'gross_pay': 0.0, 'net_pay': 0.0, 'total_deductions': 0.0,
+                'remarks': 'PROJECTED ESTIMATE'
+             }
+             
+             exp_data = logic.calculate_expected_pay(empty_buckets, ref_rate, dummy_stub, ref_ded, pd.DataFrame(), ref_earn)
 
         c1, c2 = st.columns(2)
         with c1:
