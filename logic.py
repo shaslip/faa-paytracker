@@ -356,11 +356,16 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
 
     rows = []
     
+    total_reg_hours = t_reg + t_hol_leave
+    total_reg_amt = amt_reg + amt_hol_leave
+    
+    if total_reg_hours > 0:
+        rows.append(["Regular Pay", base_rate, total_reg_hours, total_reg_amt])
+    
     # List of tuples: (Type, Rate, Hours, Amount)
     # We use specific keywords that match typical paystub labels to help the helper function find matches
     items = []
     if t_reg > 0: items.append(("Regular Pay", base_rate, t_reg, amt_reg))
-    if t_hol_leave > 0: items.append(("Holiday Leave", base_rate, t_hol_leave, amt_hol_leave))
     if amt_cip: items.append(("Controller Incentive Pay", r_cip, (t_reg + t_hol_leave), amt_cip))
     
     if t_ot:
