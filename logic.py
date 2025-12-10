@@ -141,35 +141,18 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
     
     # 1. Determine "Observed Holiday" (ATC Slide Rule)
     is_observed_holiday = False
-    
-    # We iterate through the raw holiday list to see if TODAY is the observed date for any of them
     for h_str in HOLIDAYS:
         h_date = datetime.strptime(h_str, "%Y-%m-%d").date()
         
-        # LOGIC:
-        # If Holiday falls on Workday -> Observed on that day.
-        # If Holiday falls on RDO (Sunday/6) -> Slide Forward +1.
-        # If Holiday falls on RDO (Other) -> Slide Back -1.
-        
-        h_wd = h_date.weekday()
-        obs_date = h_date # Default
-        
-        if not std_sched_df.loc[h_wd, 'is_workday']:
-            offset = 1
-            direction = 1 if h_wd == 6 else -1
-            while True:
-                check_date = h_date + timedelta(days=(offset * direction))
-                # Check if this new date is a workday
-                if std_sched_df.loc[check_date.weekday(), 'is_workday']:
-                    obs_date = check_date
-                    break
-                offset += 1
+        # Check if TODAY is the observed date for this holiday
+        # (Using the same slide logic we used in the editor)
+        obs_date = get_observed_holiday(h_date, std_sched_df)
         
         if obs_date == current_date:
             is_observed_holiday = True
             break
 
-    # 2. Get Standard Expectation (The "Baseline")
+    # 2. Get Standard Expectation
     std_row = std_sched_df.loc[wd]
     is_workday = std_row['is_workday']
     std_hours = 0.0
@@ -185,66 +168,66 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
     night = 0.0
     sun = 0.0
     
-    if act_start and act_end:
-        s_act = datetime.combine(current_date, act_start)
-        e_act = datetime.combine(current_date, act_end)
-        
-        # Handle crossing midnight
-        if e_act <= s_act: e_act += timedelta(days=1)
-        
-        worked_hours = (e_act - s_act).total_seconds() / 3600.0
-        
-        # Night Differential Logic (18:00 - 06:00)
-        cursor = s_act
-        while cursor < e_act:
-            if cursor.hour >= 18 or cursor.hour < 6: 
-                night += 0.25
-            cursor += timedelta(minutes=15)
+    # --- FIX 1: Handle 0:00-0:00 properly ---
+    if act_start is not None and act_end is not None:
+        if act_start == act_end:
+            # User entered 00:00 to 00:00 -> Treat as 0 hours worked
+            worked_hours = 0.0
+        else:
+            s_act = datetime.combine(current_date, act_start)
+            e_act = datetime.combine(current_date, act_end)
             
-        # Sunday Premium Logic (Touch Rule)
-        if s_act.weekday() == 6 or e_act.weekday() == 6:
-            sun = min(8.0, worked_hours)
+            # Handle crossing midnight
+            if e_act <= s_act: e_act += timedelta(days=1)
+            
+            worked_hours = (e_act - s_act).total_seconds() / 3600.0
+            
+            # Night Differential Logic (18:00 - 06:00)
+            cursor = s_act
+            while cursor < e_act:
+                # Night Diff applies to all hours worked between 6pm and 6am
+                if cursor.hour >= 18 or cursor.hour < 6: 
+                    night += 0.25
+                cursor += timedelta(minutes=15)
+            
+            # Sunday Premium Logic
+            if s_act.weekday() == 6 or e_act.weekday() == 6:
+                sun = min(8.0, worked_hours)
 
     # 4. The Gap Analysis (Leave Calculation)
     leave_hours_charged = 0.0
     hol_leave_hours = 0.0
     
-    # Only calculate gaps if this is a SCHEDULED Workday
     if is_workday:
         gap = max(0.0, std_hours - worked_hours)
         
         if gap > 0:
+            # If user explicitly selected "Holiday" OR system detected it
             if leave_type == "Holiday" or is_observed_holiday:
-                # It is a paid holiday gap (Free)
                 hol_leave_hours = gap
-            else:
-                # Normal leave charged
+            # If user explicitly selected a Leave Type (e.g. Annual)
+            elif leave_type and leave_type != "None":
                 leave_hours_charged = gap
+            # Implicit Gap (No leave selected, not a holiday) -> LWOP/Unpaid
+            else:
+                pass 
     
-    # 5. Buckets for Pay Calculation
+    # 5. Buckets
     reg = 0.0
     ot = 0.0
     
     if is_workday:
-        # Normal Workday or Observed Holiday:
-        # First 8 hours are Regular Pay (or covered by Hol Leave if gap)
-        # Anything over 8 is OT.
         reg = min(8.0, worked_hours)
         ot = max(0.0, worked_hours - 8.0)
     else:
-        # RDO (Regular Day Off):
-        # If you work on an RDO, ALL hours are Overtime.
-        # (Even if this was the 'Calendar Holiday', the slide rule moved the holiday status away)
         reg = 0.0
         ot = worked_hours
 
-    # Holiday Worked Premium
-    # You get this ONLY if working on the OBSERVED Holiday.
+    # Holiday Worked Premium (Only if worked)
     hol_worked_premium = 0.0
     if is_observed_holiday and worked_hours > 0:
         hol_worked_premium = min(8.0, worked_hours)
 
-    # Return Dictionary
     return {
         "Regular": reg, 
         "Overtime": ot, 
@@ -252,7 +235,7 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
         "Sunday": sun, 
         "Holiday": hol_worked_premium,   # Premium Pay (worked)
         "Hol_Leave": hol_leave_hours,    # Base Pay (not worked)
-        "Leave_Hrs": leave_hours_charged,# User charged leave (Annual/Sick)
+        "Leave_Hrs": leave_hours_charged,
         "Leave_Type": leave_type if leave_hours_charged > 0 else None,
         "OJTI": ojti, 
         "CIC": cic
