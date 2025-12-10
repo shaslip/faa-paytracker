@@ -192,29 +192,25 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
 
 # --- 3. Paycheck Calculator (FLSA Weighted Average) ---
 def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, actual_leave, ref_earnings):
-    # Sum buckets
+    # --- 1. Calculate Earnings (Same as before) ---
     t_reg = buckets_df['Regular'].sum()
     t_ot = buckets_df['Overtime'].sum()
     t_night = buckets_df['Night'].sum()
     t_sun = buckets_df['Sunday'].sum()
-    t_hol_work = buckets_df['Holiday'].sum() # Premium
+    t_hol_work = buckets_df['Holiday'].sum() 
     t_hol_leave = buckets_df.get('Hol_Leave', pd.Series(0)).sum() if 'Hol_Leave' in buckets_df else 0.0
     t_ojti = buckets_df['OJTI'].sum()
     t_cic = buckets_df['CIC'].sum()
 
-    # 1. Base Amounts (Reg + Holiday Leave are both paid at Base Rate)
+    # Base Amounts
     amt_reg = round(t_reg * base_rate, 2)
     amt_hol_leave = round(t_hol_leave * base_rate, 2)    
     amt_true_ot = round(t_ot * base_rate, 2) if t_ot > 0 else 0.0
     
-    # 2. Differentials
+    # Differentials
     r_night = round(base_rate * 0.10, 2); amt_night = round(t_night * r_night, 2)
     r_sun = round(base_rate * 0.25, 2); amt_sun = round(t_sun * r_sun, 2)
-    
-    # Holiday Worked Premium (100% of base rate)
     amt_hol = round(t_hol_work * base_rate, 2)
-    
-    # 3. Dynamic Diffs (OJTI/CIC/CIP)
     r_ojti = round(base_rate * 0.10, 2); amt_ojti = round(t_ojti * r_ojti, 2)
     r_cic = round(base_rate * 0.10, 2); amt_cic = round(t_cic * r_cic, 2)
     
@@ -228,15 +224,12 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
              hist_reg = reg_row.iloc[0]['amount_current']
              if hist_reg > 0:
                  factor = hist_cip / hist_reg
-                 # CIP applies to Basic Pay (Reg + Holiday Leave)
                  amt_cip = round((amt_reg + amt_hol_leave) * factor, 2)
                  r_cip = round(base_rate * factor, 2)
 
-    # 4. FLSA Calculation (Weighted Average)
+    # FLSA Calculation
     amt_flsa = 0.0; r_flsa = 0.0
     if t_ot > 0:
-        # Numerator: Base (Reg+HolLeave) + True OT + Diffs + CIP + OJTI + CIC
-        # Note: Holiday Premium is included in FLSA calc
         remun = amt_reg + amt_true_ot + amt_night + amt_sun + amt_hol + amt_cip + amt_ojti + amt_cic
         hrs = t_reg + t_hol_leave + t_ot
         if hrs > 0:
@@ -244,20 +237,53 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
             r_flsa = round(rrp * 0.5, 2)
             amt_flsa = round(t_ot * r_flsa, 2)
 
-    # 5. Totals
+    # Calculate Gross
     gross = amt_reg + amt_hol_leave + amt_true_ot + amt_flsa + amt_night + amt_sun + amt_hol + amt_cip + amt_ojti + amt_cic
-    deducs = ref_deductions['amount_current'].sum() if not ref_deductions.empty else 0.0
-    net = gross - deducs
+    
+    # --- 2. Dynamic Deductions Logic ---
+    deduction_rows = []
+    total_deducs = 0.0
+    
+    # Heuristic: These items scale with Gross Pay. Everything else is treated as fixed.
+    # Note: TSP is technically % of Basic Pay (not Gross), but scaling with Gross is a safer approximation 
+    # if we lack the exact Basic Pay buckets split in the reference data.
+    PERCENTAGE_BASED = ['Federal Tax', 'State Tax', 'OASDI', 'Medicare', 'FERS', 'TSP'] 
 
-    # 6. Build Rows
+    # We need the Gross Pay from the REFERENCE stub to calculate effective tax rates
+    ref_gross = ref_earnings['amount_current'].sum() if not ref_earnings.empty else 1.0
+    
+    if not ref_deductions.empty:
+        for _, row in ref_deductions.iterrows():
+            d_type = row['type']
+            ref_amt = row['amount_current']
+            new_amt = ref_amt # Default to fixed amount
+            
+            # Check if this deduction should be calculated as a percentage
+            is_variable = any(x in d_type for x in PERCENTAGE_BASED)
+            
+            if is_variable and ref_gross > 0:
+                # Calculate effective rate: $$ Rate = \frac{Reference Amount}{Reference Gross} $$
+                effective_rate = ref_amt / ref_gross
+                
+                # Apply to new Gross: $$ New Amount = New Gross \times Rate $$
+                new_amt = round(gross * effective_rate, 2)
+            
+            deduction_rows.append({
+                'type': d_type,
+                'amount_current': new_amt,
+                'amount_ytd': 0.0, # Placeholder
+                'code': row.get('code', '')
+            })
+            total_deducs += new_amt
+
+    d_df = pd.DataFrame(deduction_rows)
+    net = gross - total_deducs
+
+    # --- 3. Build Earnings Rows (Display) ---
     rows = []
-    if t_reg > 0: 
-        rows.append(["Regular Pay", base_rate, t_reg, amt_reg])
-    if t_hol_leave > 0:
-        rows.append(["Holiday Leave", base_rate, t_hol_leave, amt_hol_leave])
-        
+    if t_reg > 0: rows.append(["Regular Pay", base_rate, t_reg, amt_reg])
+    if t_hol_leave > 0: rows.append(["Holiday Leave", base_rate, t_hol_leave, amt_hol_leave])
     if amt_cip: rows.append(["Controller Incentive Pay", r_cip, (t_reg + t_hol_leave), amt_cip])
-        
     if t_ot:
         rows.append(["FLSA Premium", r_flsa, t_ot, amt_flsa])
         rows.append(["True Overtime", base_rate, t_ot, amt_true_ot])
@@ -270,13 +296,13 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     e_df = pd.DataFrame(rows, columns=['type', 'rate', 'hours_current', 'amount_current'])
     e_df['amount_ytd'] = 0.0; e_df['hours_adjusted'] = 0.0; e_df['amount_adjusted'] = 0.0
 
-    # 7. Leave Recalc (Start + Earned - Used)
+    # --- 4. Leave Recalc (Unchanged) ---
     l_rows = []
     target_leaves = ['Annual', 'Sick', 'Credit']
     if not actual_leave.empty:
         for _, row in actual_leave.iterrows():
             if any(x in row['type'] for x in target_leaves):
-                end = row['balance_start'] + row['earned_current'] # Used is 0 in this V2 model for now
+                end = row['balance_start'] + row['earned_current']
                 l_rows.append({
                     'type': row['type'], 'balance_start': row['balance_start'],
                     'earned_current': row['earned_current'], 'used_current': 0.0, 'balance_end': end
@@ -284,6 +310,6 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     l_df = pd.DataFrame(l_rows)
 
     stub = actual_meta.copy()
-    stub.update({'gross_pay': gross, 'net_pay': net, 'total_deductions': deducs, 'remarks': 'GENERATED V2\nWeighted Avg FLSA'})
+    stub.update({'gross_pay': gross, 'net_pay': net, 'total_deductions': total_deducs, 'remarks': 'GENERATED V2\nWeighted Avg FLSA'})
     
-    return {'stub': stub, 'earnings': e_df, 'deductions': ref_deductions, 'leave': l_df}
+    return {'stub': stub, 'earnings': e_df, 'deductions': d_df, 'leave': l_df}
