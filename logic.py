@@ -139,7 +139,7 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
     current_date = dt_obj.date()
     wd = dt_obj.weekday()
     
-    # 1. Determine "Observed Holiday" (ATC Slide Rule)
+    # 1. Determine "Observed Holiday"
     is_observed_holiday = False
     for h_str in HOLIDAYS:
         h_date = datetime.strptime(h_str, "%Y-%m-%d").date()
@@ -148,7 +148,7 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
             is_observed_holiday = True
             break
 
-    # 2. Get Standard Expectation
+    # 2. Get Standard Expectation (Check if RDO or Workday)
     std_row = std_sched_df.loc[wd]
     is_workday = std_row['is_workday']
     std_hours = 0.0
@@ -162,52 +162,57 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
     # 3. Calculate Actual Worked Data
     worked_hours = 0.0
     night = 0.0
-    sun = 0.0
+    final_sunday_premium = 0.0
     
     if act_start is not None and act_end is not None:
         if act_start == act_end:
-            # 00:00 to 00:00 = 0 hours worked
             worked_hours = 0.0
         else:
-            # --- INTELLIGENT SHIFT LOGIC ---
             s_act = datetime.combine(current_date, act_start)
             e_act = datetime.combine(current_date, act_end)
             
+            # --- INTELLIGENT SHIFT LOGIC (Mid-Shift Heuristic) ---
             if e_act < s_act:
-                # Crossover Shift (End is strictly less than Start)
-                # If Start is 19:00 (7pm) or later, assume it's a MID shift (Started Yesterday).
-                # This covers 8pm-6am, 9pm-6am, 10pm-6am, etc.
-                # Anything earlier (e.g. 15:30 start) is treated as a Swing shift (Ends Tomorrow).
-                
                 if s_act.hour >= 19:
-                    s_act -= timedelta(days=1) # Back up start to previous day
-                    # e_act stays on current day (e.g. Mon Morning)
+                    s_act -= timedelta(days=1)
                 else:
-                    e_act += timedelta(days=1) # Push end to next day
+                    e_act += timedelta(days=1)
             
-            # Duration Calc
             worked_hours = (e_act - s_act).total_seconds() / 3600.0
             
-            # Night Differential Logic (18:00 - 06:00)
+            # --- DIFFERENTIALS ---
+            # We track "Calendar Sunday" hours inside the loop for Overtime shifts
+            calendar_sunday_hours = 0.0
+            
             cursor = s_act
             while cursor < e_act:
-                # Night Diff applies to all hours worked between 6pm and 6am
+                # 1. Night Diff
                 if cursor.hour >= 18 or cursor.hour < 6: 
                     night += 0.25
+                
+                # 2. Calendar Sunday (Strict Accumulation)
+                if cursor.weekday() == 6:
+                    calendar_sunday_hours += 0.25
+
                 cursor += timedelta(minutes=15)
             
-            # Sunday Premium Logic (Touch Rule)
-            # 22:00(Sun) - 06:00(Mon) -> s_act.weekday() is 6 (Sun). Sunday Premium = YES.
-            if s_act.weekday() == 6 or e_act.weekday() == 6:
-                sun = min(8.0, worked_hours)
+            # --- SUNDAY PREMIUM DECISION LOGIC ---
+            if is_workday:
+                # REGULAR SHIFT -> Apply Touch Rule (Federal Regular Pay Rule)
+                # If any part of the shift touches Sunday, pay premium for the whole shift
+                if s_act.weekday() == 6 or e_act.weekday() == 6:
+                    final_sunday_premium = min(8.0, worked_hours)
+            else:
+                # OVERTIME SHIFT (RDO) -> Apply Calendar Rule
+                # Only pay for hours actually worked on Sunday
+                final_sunday_premium = calendar_sunday_hours
 
-    # 4. The Gap Analysis (Leave Calculation)
+    # 4. The Gap Analysis
     leave_hours_charged = 0.0
     hol_leave_hours = 0.0
     
     if is_workday:
         gap = max(0.0, std_hours - worked_hours)
-        
         if gap > 0:
             if leave_type == "Holiday" or is_observed_holiday:
                 hol_leave_hours = gap
@@ -236,7 +241,7 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
         "Regular": reg, 
         "Overtime": ot, 
         "Night": night, 
-        "Sunday": sun, 
+        "Sunday": final_sunday_premium,
         "Holiday": hol_worked_premium,
         "Hol_Leave": hol_leave_hours,
         "Leave_Hrs": leave_hours_charged,
