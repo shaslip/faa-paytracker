@@ -143,11 +143,7 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
     is_observed_holiday = False
     for h_str in HOLIDAYS:
         h_date = datetime.strptime(h_str, "%Y-%m-%d").date()
-        
-        # Check if TODAY is the observed date for this holiday
-        # (Using the same slide logic we used in the editor)
         obs_date = get_observed_holiday(h_date, std_sched_df)
-        
         if obs_date == current_date:
             is_observed_holiday = True
             break
@@ -168,18 +164,28 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
     night = 0.0
     sun = 0.0
     
-    # --- FIX 1: Handle 0:00-0:00 properly ---
     if act_start is not None and act_end is not None:
         if act_start == act_end:
-            # User entered 00:00 to 00:00 -> Treat as 0 hours worked
+            # 00:00 to 00:00 = 0 hours worked
             worked_hours = 0.0
         else:
+            # --- INTELLIGENT SHIFT LOGIC ---
             s_act = datetime.combine(current_date, act_start)
             e_act = datetime.combine(current_date, act_end)
             
-            # Handle crossing midnight
-            if e_act <= s_act: e_act += timedelta(days=1)
+            if e_act < s_act:
+                # Crossover Shift (End is strictly less than Start)
+                # If Start is 19:00 (7pm) or later, assume it's a MID shift (Started Yesterday).
+                # This covers 8pm-6am, 9pm-6am, 10pm-6am, etc.
+                # Anything earlier (e.g. 15:30 start) is treated as a Swing shift (Ends Tomorrow).
+                
+                if s_act.hour >= 19:
+                    s_act -= timedelta(days=1) # Back up start to previous day
+                    # e_act stays on current day (e.g. Mon Morning)
+                else:
+                    e_act += timedelta(days=1) # Push end to next day
             
+            # Duration Calc
             worked_hours = (e_act - s_act).total_seconds() / 3600.0
             
             # Night Differential Logic (18:00 - 06:00)
@@ -190,7 +196,8 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
                     night += 0.25
                 cursor += timedelta(minutes=15)
             
-            # Sunday Premium Logic
+            # Sunday Premium Logic (Touch Rule)
+            # 22:00(Sun) - 06:00(Mon) -> s_act.weekday() is 6 (Sun). Sunday Premium = YES.
             if s_act.weekday() == 6 or e_act.weekday() == 6:
                 sun = min(8.0, worked_hours)
 
@@ -202,13 +209,10 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
         gap = max(0.0, std_hours - worked_hours)
         
         if gap > 0:
-            # If user explicitly selected "Holiday" OR system detected it
             if leave_type == "Holiday" or is_observed_holiday:
                 hol_leave_hours = gap
-            # If user explicitly selected a Leave Type (e.g. Annual)
             elif leave_type and leave_type != "None":
                 leave_hours_charged = gap
-            # Implicit Gap (No leave selected, not a holiday) -> LWOP/Unpaid
             else:
                 pass 
     
@@ -223,7 +227,7 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
         reg = 0.0
         ot = worked_hours
 
-    # Holiday Worked Premium (Only if worked)
+    # Holiday Worked Premium
     hol_worked_premium = 0.0
     if is_observed_holiday and worked_hours > 0:
         hol_worked_premium = min(8.0, worked_hours)
@@ -233,8 +237,8 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
         "Overtime": ot, 
         "Night": night, 
         "Sunday": sun, 
-        "Holiday": hol_worked_premium,   # Premium Pay (worked)
-        "Hol_Leave": hol_leave_hours,    # Base Pay (not worked)
+        "Holiday": hol_worked_premium,
+        "Hol_Leave": hol_leave_hours,
         "Leave_Hrs": leave_hours_charged,
         "Leave_Type": leave_type if leave_hours_charged > 0 else None,
         "OJTI": ojti, 
