@@ -176,3 +176,13 @@ def get_reference_data(current_stub_id):
 
     conn.close()
     return 0.0, pd.DataFrame(), pd.DataFrame()
+
+def has_saved_timesheet(period_ending):
+    """Returns True if the user has explicitly saved a timesheet for this period."""
+    conn = get_db()
+    c = conn.cursor()
+    # We check if ANY entries exist for this period_ending in the V2 table
+    c.execute("SELECT count(*) FROM timesheet_entry_v2 WHERE period_ending = ?", (period_ending,))
+    count = c.fetchone()[0]
+    conn.close()
+    return count > 0
