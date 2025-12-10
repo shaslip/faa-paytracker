@@ -135,7 +135,6 @@ def save_timesheet_v2(period_ending, df):
     conn = get_db()
     c = conn.cursor()
     for _, row in df.iterrows():
-        # Data is already string from TextColumn
         s_str = row['Start']
         e_str = row['End']
         
@@ -143,13 +142,21 @@ def save_timesheet_v2(period_ending, df):
         if not s_str: s_str = None
         if not e_str: e_str = None
         
+        # --- FIX: Sanitize Leave_Type ---
+        l_type = row['Leave_Type']
+        if isinstance(l_type, list): 
+            l_type = l_type[0] if l_type else None
+        if pd.isna(l_type) or l_type == "": 
+            l_type = None
+        # --------------------------------
+        
         c.execute("""
             INSERT INTO timesheet_entry_v2 (period_ending, day_date, start_time, end_time, leave_type, ojti_hours, cic_hours)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(period_ending, day_date) DO UPDATE SET
             start_time=excluded.start_time, end_time=excluded.end_time,
             leave_type=excluded.leave_type, ojti_hours=excluded.ojti_hours, cic_hours=excluded.cic_hours
-        """, (period_ending, row['Date'], s_str, e_str, row['Leave_Type'], row['OJTI'], row['CIC']))
+        """, (period_ending, row['Date'], s_str, e_str, l_type, row['OJTI'], row['CIC']))
     conn.commit()
     conn.close()
 
