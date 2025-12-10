@@ -219,6 +219,7 @@ with tab_audit:
                 # 4. Run & Save to Session State
                 exp_data = logic.calculate_expected_pay(buckets, ref_rate, stub_meta, ref_ded, stub_leave, ref_earn)
                 st.session_state['res'] = exp_data
+                st.rerun()
             
             # Use same regex here to allow clearing shifts
             time_regex = r"^$|^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
