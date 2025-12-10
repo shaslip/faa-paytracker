@@ -156,6 +156,11 @@ with tab_audit:
             return f"{icon} {r['period_ending']} (Net: ${r['net_pay']:,.2f})"
 
         sel_id = st.selectbox("Select Pay Period:", stubs['id'], format_func=fmt)
+
+        # If the user switches the dropdown, clear the previous calculation
+        if sel_id != st.session_state.get('last_viewed_id'):
+            st.session_state['res'] = None
+            st.session_state['last_viewed_id'] = sel_id
         
         # 2. Setup Context (Projected vs Actual)
         if sel_id == -1:
@@ -173,6 +178,47 @@ with tab_audit:
         # 3. V2 Editor
         with st.expander("📝 Edit Schedule (Actual Worked)", expanded=True):
             ts_v2 = models.load_timesheet_v2(pe)
+
+            # Logic: If we haven't calculated yet (res is None) BUT we have saved data in DB,
+            # auto-run the calculation so the user sees their saved state immediately.
+            if st.session_state.get('res') is None and models.has_saved_timesheet(pe):
+                
+                # 1. Fetch Dependencies
+                conn = models.get_db()
+                std_sched = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
+                conn.close()
+                ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
+
+                # 2. Re-run Bucket Logic
+                bucket_rows = []
+                for _, row in ts_v2.iterrows():
+                    s_obj = pd.to_datetime(row['Start'], format='%H:%M').time() if row['Start'] else None
+                    e_obj = pd.to_datetime(row['End'], format='%H:%M').time() if row['End'] else None
+                    
+                    b = logic.calculate_daily_breakdown(
+                        row['Date'], s_obj, e_obj, row['Leave_Type'], 
+                        row['OJTI'], row['CIC'], std_sched
+                    )
+                    bucket_rows.append(b)
+                buckets = pd.DataFrame(bucket_rows, columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"])
+
+                # 3. Setup Metadata for Calculator
+                if act_data:
+                    stub_meta = act_data['stub']
+                    stub_leave = act_data['leave']
+                else:
+                    stub_meta = {
+                        'agency': 'Federal Aviation Administration',
+                        'period_ending': pe,
+                        'pay_date': 'Estimated',
+                        'gross_pay': 0.0, 'net_pay': 0.0, 'total_deductions': 0.0,
+                        'remarks': 'PROJECTED ESTIMATE'
+                    }
+                    stub_leave = pd.DataFrame()
+
+                # 4. Run & Save to Session State
+                exp_data = logic.calculate_expected_pay(buckets, ref_rate, stub_meta, ref_ded, stub_leave, ref_earn)
+                st.session_state['res'] = exp_data
             
             # Use same regex here to allow clearing shifts
             time_regex = r"^$|^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
