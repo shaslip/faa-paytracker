@@ -213,12 +213,11 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
         gap = max(0.0, std_hours - worked_hours)
         
         if gap > 0:
-            if is_observed_holiday:
-                # If observed holiday and you didn't work (or worked partial), 
-                # the gap is covered by Holiday Leave (Paid, Free).
+            if leave_type == "Holiday" or is_observed_holiday:
+                # It is a paid holiday gap (Free)
                 hol_leave_hours = gap
             else:
-                # Normal workday gap -> Charge user leave (Annual/Sick/etc)
+                # Normal leave charged
                 leave_hours_charged = gap
     
     # 5. Buckets for Pay Calculation
