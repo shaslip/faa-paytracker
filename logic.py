@@ -2,6 +2,12 @@ import pandas as pd
 import models
 from datetime import datetime, timedelta
 
+HOLIDAYS = [
+    "2024-12-25", "2025-01-01", "2025-01-20", "2025-02-17", "2025-05-26", 
+    "2025-06-19", "2025-07-04", "2025-09-01", "2025-10-13", "2025-11-11", 
+    "2025-11-27", "2025-12-25"
+]
+
 # --- 1. Create a ledger to track missed government payments ---
 def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched):
     ledger = []
@@ -128,11 +134,6 @@ def get_observed_holiday(date_obj, schedule_df):
         offset += 1
 
 def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, cic, std_sched_df):
-    # --- CONSTANTS ---
-    HOLIDAYS = ["2024-12-25", "2025-01-01", "2025-01-20", "2025-02-17", "2025-05-26", 
-                "2025-06-19", "2025-07-04", "2025-09-01", "2025-10-13", "2025-11-11", 
-                "2025-11-27", "2025-12-25"]
-
     # --- SETUP ---
     dt_obj = datetime.strptime(date_str, "%Y-%m-%d")
     current_date = dt_obj.date()
