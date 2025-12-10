@@ -192,7 +192,7 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
 
 # --- 3. Paycheck Calculator (FLSA Weighted Average) ---
 def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, actual_leave, ref_earnings):
-    # --- 1. Calculate Earnings (Same as before) ---
+    # --- 1. Calculate Earnings Amounts (Same as before) ---
     t_reg = buckets_df['Regular'].sum()
     t_ot = buckets_df['Overtime'].sum()
     t_night = buckets_df['Night'].sum()
@@ -217,8 +217,8 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     # CIP Logic
     amt_cip = 0.0; r_cip = 0.0
     if not ref_earnings.empty:
-         cip_row = ref_earnings[ref_earnings['type'].str.contains('Controller Incentive', case=False)]
-         reg_row = ref_earnings[ref_earnings['type'].str.contains('Regular', case=False)]
+         cip_row = ref_earnings[ref_earnings['type'].str.contains('Controller Incentive', case=False, na=False)]
+         reg_row = ref_earnings[ref_earnings['type'].str.contains('Regular', case=False, na=False)]
          if not cip_row.empty and not reg_row.empty:
              hist_cip = cip_row.iloc[0]['amount_current']
              hist_reg = reg_row.iloc[0]['amount_current']
@@ -240,38 +240,34 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     # Calculate Gross
     gross = amt_reg + amt_hol_leave + amt_true_ot + amt_flsa + amt_night + amt_sun + amt_hol + amt_cip + amt_ojti + amt_cic
     
-    # --- 2. Dynamic Deductions Logic ---
+    # --- 2. Dynamic Deductions (With YTD Fix) ---
     deduction_rows = []
     total_deducs = 0.0
-    
-    # Heuristic: These items scale with Gross Pay. Everything else is treated as fixed.
-    # Note: TSP is technically % of Basic Pay (not Gross), but scaling with Gross is a safer approximation 
-    # if we lack the exact Basic Pay buckets split in the reference data.
     PERCENTAGE_BASED = ['Federal Tax', 'State Tax', 'OASDI', 'Medicare', 'FERS', 'TSP'] 
 
-    # We need the Gross Pay from the REFERENCE stub to calculate effective tax rates
     ref_gross = ref_earnings['amount_current'].sum() if not ref_earnings.empty else 1.0
     
     if not ref_deductions.empty:
         for _, row in ref_deductions.iterrows():
             d_type = row['type']
             ref_amt = row['amount_current']
-            new_amt = ref_amt # Default to fixed amount
+            ref_ytd = row.get('amount_ytd', 0.0)
             
-            # Check if this deduction should be calculated as a percentage
+            # A. Calculate New Current
+            new_amt = ref_amt 
             is_variable = any(x in d_type for x in PERCENTAGE_BASED)
-            
             if is_variable and ref_gross > 0:
-                # Calculate effective rate: $$ Rate = \frac{Reference Amount}{Reference Gross} $$
                 effective_rate = ref_amt / ref_gross
-                
-                # Apply to new Gross: $$ New Amount = New Gross \times Rate $$
                 new_amt = round(gross * effective_rate, 2)
             
+            # B. Calculate New YTD (Swap out the ref amount for the new amount)
+            # Formula: Old YTD - Old Current + New Current
+            new_ytd = round(ref_ytd - ref_amt + new_amt, 2)
+
             deduction_rows.append({
                 'type': d_type,
                 'amount_current': new_amt,
-                'amount_ytd': 0.0, # Placeholder
+                'amount_ytd': new_ytd,
                 'code': row.get('code', '')
             })
             total_deducs += new_amt
@@ -279,22 +275,43 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     d_df = pd.DataFrame(deduction_rows)
     net = gross - total_deducs
 
-    # --- 3. Build Earnings Rows (Display) ---
+    # --- 3. Build Earnings Rows (With YTD Fix) ---
+    # Helper to find reference data for YTD calc
+    def get_ref_ytd(type_name, new_current):
+        if ref_earnings.empty: return new_current
+        # Fuzzy match the type name
+        match = ref_earnings[ref_earnings['type'].str.contains(type_name, case=False, regex=False, na=False)]
+        if not match.empty:
+            r_ytd = match.iloc[0]['amount_ytd']
+            r_curr = match.iloc[0]['amount_current']
+            return round(r_ytd - r_curr + new_current, 2)
+        return new_current # If new type, YTD is just the current amount
+
     rows = []
-    if t_reg > 0: rows.append(["Regular Pay", base_rate, t_reg, amt_reg])
-    if t_hol_leave > 0: rows.append(["Holiday Leave", base_rate, t_hol_leave, amt_hol_leave])
-    if amt_cip: rows.append(["Controller Incentive Pay", r_cip, (t_reg + t_hol_leave), amt_cip])
-    if t_ot:
-        rows.append(["FLSA Premium", r_flsa, t_ot, amt_flsa])
-        rows.append(["True Overtime", base_rate, t_ot, amt_true_ot])
-    if t_night: rows.append(["Night Differential", r_night, t_night, amt_night])
-    if t_sun: rows.append(["Sunday Premium", r_sun, t_sun, amt_sun])
-    if t_hol_work: rows.append(["Holiday Worked", base_rate, t_hol_work, amt_hol])
-    if t_ojti: rows.append(["OJTI", r_ojti, t_ojti, amt_ojti])
-    if t_cic: rows.append(["CIC", r_cic, t_cic, amt_cic])
     
-    e_df = pd.DataFrame(rows, columns=['type', 'rate', 'hours_current', 'amount_current'])
-    e_df['amount_ytd'] = 0.0; e_df['hours_adjusted'] = 0.0; e_df['amount_adjusted'] = 0.0
+    # List of tuples: (Type, Rate, Hours, Amount)
+    # We use specific keywords that match typical paystub labels to help the helper function find matches
+    items = []
+    if t_reg > 0: items.append(("Regular Pay", base_rate, t_reg, amt_reg))
+    if t_hol_leave > 0: items.append(("Holiday Leave", base_rate, t_hol_leave, amt_hol_leave))
+    if amt_cip: items.append(("Controller Incentive Pay", r_cip, (t_reg + t_hol_leave), amt_cip))
+    
+    if t_ot:
+        items.append(("FLSA Premium", r_flsa, t_ot, amt_flsa))
+        items.append(("True Overtime", base_rate, t_ot, amt_true_ot))
+        
+    if t_night: items.append(("Night Differential", r_night, t_night, amt_night))
+    if t_sun: items.append(("Sunday Premium", r_sun, t_sun, amt_sun))
+    if t_hol_work: items.append(("Holiday Worked", base_rate, t_hol_work, amt_hol))
+    if t_ojti: items.append(("OJTI", r_ojti, t_ojti, amt_ojti))
+    if t_cic: items.append(("CIC", r_cic, t_cic, amt_cic))
+    
+    for label, rate, hrs, amt in items:
+        ytd = get_ref_ytd(label, amt)
+        rows.append([label, rate, hrs, amt, ytd])
+    
+    e_df = pd.DataFrame(rows, columns=['type', 'rate', 'hours_current', 'amount_current', 'amount_ytd'])
+    e_df['hours_adjusted'] = 0.0; e_df['amount_adjusted'] = 0.0
 
     # --- 4. Leave Recalc (Unchanged) ---
     l_rows = []
