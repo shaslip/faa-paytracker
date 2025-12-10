@@ -12,12 +12,7 @@ def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched)
     for _, stub in sorted_stubs.iterrows():
         pe = stub['period_ending']
         
-        # --- CRITICAL CHANGE ---
-        # Check if the user has actually SAVED a timesheet for this period.
-        # If models.load_timesheet_v2 returns a default 80hr template when no DB record exists,
-        # we need a way to know that. 
-        # let's assume models.has_saved_timesheet(pe) returns True/False
-        
+        # Check if the user has explicitly SAVED a timesheet for this period
         is_audited = models.has_saved_timesheet(pe) 
 
         if not is_audited:
@@ -31,19 +26,33 @@ def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched)
             # You entered data -> We trust YOU.
             ts_v2 = models.load_timesheet_v2(pe)
             
-            # ... (Run the bucket calculation logic here) ...
+            # --- FIX STARTS HERE: Explicitly build the buckets ---
             bucket_rows = []
             for _, row in ts_v2.iterrows():
-                 # ... (standard daily breakdown logic) ...
-                 pass # (abbreviated for clarity)
+                # Convert string times to datetime objects if they exist
+                s_obj = pd.to_datetime(row['Start'], format='%H:%M').time() if row['Start'] else None
+                e_obj = pd.to_datetime(row['End'], format='%H:%M').time() if row['End'] else None
+                
+                b = calculate_daily_breakdown(
+                    row['Date'], s_obj, e_obj, row['Leave_Type'], 
+                    row['OJTI'], row['CIC'], std_sched
+                )
+                bucket_rows.append(b)
             
+            # Create the DataFrame that was missing previously
+            buckets = pd.DataFrame(bucket_rows)
+            # --- FIX ENDS HERE ---
+
             # Calculate Expected Gross
+            # We pass empty dfs for deducs/leave because we only care about Gross for the ledger
             exp_data = calculate_expected_pay(buckets, ref_rate, stub, pd.DataFrame(), pd.DataFrame(), ref_earn)
             expected_gross = exp_data['stub']['gross_pay']
             
             # Calculate Difference
             diff = stub['gross_pay'] - expected_gross
             status = "✅ Balanced"
+            
+            # Floating point tolerance
             if diff < -1.0: status = "🔴 Gov Owes You"
             elif diff > 1.0: status = "🟢 Backpay/Surplus"
 
