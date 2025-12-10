@@ -4,9 +4,9 @@ A local Python-based dashboard for government employees to audit paystubs, detec
 
 ## Features
 
-* **Automated Auditing:** Instantly flags if Leave balances don't match the math (Start + Earned - Used = End).
-* **Anomaly Detection:** Alerts you if new deduction codes appear or tax rates shift unexpectedly.
-* **Visual Replica:** Recreates the Employee Express paystub exactly but highlights errors in **Red** with explanatory tooltips.
+* **Automated Auditing:** Flags if Leave balances don't match the math (Start + Earned - Used = End).
+* **Anomaly Detection:** Flags if new deduction codes appear or tax rates shift unexpectedly.
+* **Visual Replica:** Recreates the Employee Express paystub but highlights errors with explanatory tooltips.
 * **Shutdown Ready:** Includes a "Missed payments Ledger" to project missed paychecks during a shutdown and reconcile them against the eventual "Lump Sum" payout.
 * **Trends:** Visualizes Gross vs. Net pay over time.
 
