@@ -100,7 +100,7 @@ with tab_audit:
                         "Diff": "${:,.2f}", 
                         "Balance": "${:,.2f}"
                     }).map(highlight_status, subset=['Status']),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True
                 )
         else:
