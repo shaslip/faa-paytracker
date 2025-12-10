@@ -48,6 +48,69 @@ with tab_facts:
 
 # --- TAB: AUDIT ---
 with tab_audit:
+    # ==========================
+    # Shutdown Reconciliation
+    # ==========================
+    st.header("🏛️ Shutdown Reconciliation")
+    
+    with st.expander("View Cumulative Ledger", expanded=False):
+        # 1. Fetch Data
+        stubs_for_ledger = models.get_paystubs_meta()
+        
+        # 2. Reference Data (Grab most recent for rate estimation)
+        ref_rate, ref_ded, ref_earn = models.get_reference_data(
+            stubs_for_ledger.iloc[0]['id'] if not stubs_for_ledger.empty else 1
+        )
+        
+        # 3. Schedule for Fallbacks
+        conn = models.get_db()
+        std_sched = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
+        conn.close()
+
+        if not stubs_for_ledger.empty:
+            # 4. Run Logic
+            ledger_df = logic.generate_shutdown_ledger(stubs_for_ledger, ref_rate, ref_ded, ref_earn, std_sched)
+
+            # 5. Calculate Metrics
+            # We filter for rows that are NOT 'Unaudited' to get the real debt
+            audited_rows = ledger_df[ledger_df['Status'] != "⚪ Unaudited"]
+            current_balance = audited_rows.iloc[-1]['Balance'] if not audited_rows.empty else 0.0
+            
+            # 6. Display Top-Level Metrics
+            m1, m2 = st.columns([1, 3])
+            with m1:
+                if current_balance < -1.0:
+                    st.error(f"⚠️ Gov Owes You\n# ${abs(current_balance):,.2f}")
+                elif current_balance > 1.0:
+                    st.success(f"💰 Overpaid/Bonus\n# ${current_balance:,.2f}")
+                else:
+                    st.info(f"✅ Settled\n# $0.00")
+            
+            with m2:
+                # Simple style map for the dataframe
+                def highlight_status(val):
+                    if "Gov Owes" in val: return 'background-color: #ffcccc; color: black;'
+                    if "Backpay" in val: return 'background-color: #ccffcc; color: black;'
+                    return ''
+
+                st.dataframe(
+                    ledger_df.style.format({
+                        "Expected": "${:,.2f}", 
+                        "Actual": "${:,.2f}", 
+                        "Diff": "${:,.2f}", 
+                        "Balance": "${:,.2f}"
+                    }).map(highlight_status, subset=['Status']),
+                    use_container_width=True,
+                    hide_index=True
+                )
+        else:
+            st.warning("No paystubs found to generate ledger.")
+            
+    st.divider()
+
+    # ==========================
+    # Begin Deep Dive Audit code
+    # ==========================
     st.header("Deep Dive Audit")
     
     # 1. Fetch Stubs & Calculate Next Period
