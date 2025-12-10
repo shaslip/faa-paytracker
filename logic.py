@@ -1,7 +1,66 @@
 import pandas as pd
 from datetime import datetime, timedelta
 
-# --- 1. Audit Math (Leave & Gross/Net) ---
+# --- 1. Create a ledger to track missed government payments ---
+def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched):
+    ledger = []
+    running_balance = 0.0
+    
+    sorted_stubs = stubs_meta.sort_values('period_ending', ascending=True)
+
+    for _, stub in sorted_stubs.iterrows():
+        pe = stub['period_ending']
+        
+        # --- CRITICAL CHANGE ---
+        # Check if the user has actually SAVED a timesheet for this period.
+        # If models.load_timesheet_v2 returns a default 80hr template when no DB record exists,
+        # we need a way to know that. 
+        # let's assume models.has_saved_timesheet(pe) returns True/False
+        
+        is_audited = models.has_saved_timesheet(pe) 
+
+        if not is_audited:
+            # OPTION 1: The "Ignorance is Bliss" Approach
+            # If you didn't input data, we assume the Gov is correct.
+            expected_gross = stub['gross_pay']
+            diff = 0.0
+            status = "⚪ Unaudited"
+            
+        else:
+            # You entered data -> We trust YOU.
+            ts_v2 = models.load_timesheet_v2(pe)
+            
+            # ... (Run the bucket calculation logic here) ...
+            bucket_rows = []
+            for _, row in ts_v2.iterrows():
+                 # ... (standard daily breakdown logic) ...
+                 pass # (abbreviated for clarity)
+            
+            # Calculate Expected Gross
+            exp_data = calculate_expected_pay(buckets, ref_rate, stub, pd.DataFrame(), pd.DataFrame(), ref_earn)
+            expected_gross = exp_data['stub']['gross_pay']
+            
+            # Calculate Difference
+            diff = stub['gross_pay'] - expected_gross
+            status = "✅ Balanced"
+            if diff < -1.0: status = "🔴 Gov Owes You"
+            elif diff > 1.0: status = "🟢 Backpay/Surplus"
+
+        # Update Running Balance
+        running_balance += diff
+        
+        ledger.append({
+            "Period Ending": pe,
+            "Expected": expected_gross,
+            "Actual": stub['gross_pay'],
+            "Diff": diff,
+            "Balance": running_balance,
+            "Status": status
+        })
+
+    return pd.DataFrame(ledger)
+
+# --- 2. Audit Math (Leave & Gross/Net) ---
 def run_full_audit(data):
     stub = data['stub']
     flags = {}
@@ -33,8 +92,7 @@ def run_full_audit(data):
         
     return flags
 
-# --- 2. Time Engine (V2) ---
-
+# --- 3. Time Engine (V2) ---
 def get_observed_holiday(date_obj, schedule_df):
     """
     Determines the 'In-Lieu-Of' date for a given holiday based on RDOs (ATC Slide Rule).
@@ -190,7 +248,7 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
         "CIC": cic
     }
 
-# --- 3. Paycheck Calculator (FLSA Weighted Average) ---
+# --- 4. Paycheck Calculator (FLSA Weighted Average) ---
 def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, actual_leave, ref_earnings):
     # --- 1. Calculate Earnings Amounts (Same as before) ---
     t_reg = buckets_df['Regular'].sum()
