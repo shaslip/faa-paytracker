@@ -243,7 +243,7 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
 
 # --- 4. Paycheck Calculator (FLSA Weighted Average) ---
 def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, actual_leave, ref_earnings):
-    # --- 1. Calculate Earnings Amounts (Same as before) ---
+    # Sum buckets
     t_reg = buckets_df['Regular'].sum()
     t_ot = buckets_df['Overtime'].sum()
     t_night = buckets_df['Night'].sum()
@@ -253,8 +253,13 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     t_ojti = buckets_df['OJTI'].sum()
     t_cic = buckets_df['CIC'].sum()
 
-    # Base Amounts
-    amt_reg = round(t_reg * base_rate, 2)
+    # --- FIX 2: Aggregate Regular Pay ---
+    # Combine Worked Reg + Holiday Leave into a single "Regular Pay" bucket
+    total_reg_hours = t_reg + t_hol_leave
+    amt_reg_total = round(total_reg_hours * base_rate, 2)
+    
+    # Base Amounts for diff calcs
+    amt_reg_worked = round(t_reg * base_rate, 2)
     amt_hol_leave = round(t_hol_leave * base_rate, 2)    
     amt_true_ot = round(t_ot * base_rate, 2) if t_ot > 0 else 0.0
     
@@ -275,27 +280,28 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
              hist_reg = reg_row.iloc[0]['amount_current']
              if hist_reg > 0:
                  factor = hist_cip / hist_reg
-                 amt_cip = round((amt_reg + amt_hol_leave) * factor, 2)
+                 # Apply to TOTAL basic pay (Worked + Hol Leave)
+                 amt_cip = round(amt_reg_total * factor, 2)
                  r_cip = round(base_rate * factor, 2)
 
     # FLSA Calculation
     amt_flsa = 0.0; r_flsa = 0.0
     if t_ot > 0:
-        remun = amt_reg + amt_true_ot + amt_night + amt_sun + amt_hol + amt_cip + amt_ojti + amt_cic
-        hrs = t_reg + t_hol_leave + t_ot
+        # Remuneration includes Base (Worked+Leave) + Diffs + CIP
+        remun = amt_reg_total + amt_true_ot + amt_night + amt_sun + amt_hol + amt_cip + amt_ojti + amt_cic
+        hrs = total_reg_hours + t_ot
         if hrs > 0:
             rrp = remun / hrs
             r_flsa = round(rrp * 0.5, 2)
             amt_flsa = round(t_ot * r_flsa, 2)
 
     # Calculate Gross
-    gross = amt_reg + amt_hol_leave + amt_true_ot + amt_flsa + amt_night + amt_sun + amt_hol + amt_cip + amt_ojti + amt_cic
+    gross = amt_reg_total + amt_true_ot + amt_flsa + amt_night + amt_sun + amt_hol + amt_cip + amt_ojti + amt_cic
     
-    # --- 2. Dynamic Deductions (With YTD Fix) ---
+    # --- Deductions (Same as before) ---
     deduction_rows = []
     total_deducs = 0.0
     PERCENTAGE_BASED = ['Federal Tax', 'State Tax', 'OASDI', 'Medicare', 'FERS', 'TSP'] 
-
     ref_gross = ref_earnings['amount_current'].sum() if not ref_earnings.empty else 1.0
     
     if not ref_deductions.empty:
@@ -304,53 +310,37 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
             ref_amt = row['amount_current']
             ref_ytd = row.get('amount_ytd', 0.0)
             
-            # A. Calculate New Current
             new_amt = ref_amt 
             is_variable = any(x in d_type for x in PERCENTAGE_BASED)
             if is_variable and ref_gross > 0:
                 effective_rate = ref_amt / ref_gross
                 new_amt = round(gross * effective_rate, 2)
             
-            # B. Calculate New YTD (Swap out the ref amount for the new amount)
-            # Formula: Old YTD - Old Current + New Current
             new_ytd = round(ref_ytd - ref_amt + new_amt, 2)
-
-            deduction_rows.append({
-                'type': d_type,
-                'amount_current': new_amt,
-                'amount_ytd': new_ytd,
-                'code': row.get('code', '')
-            })
+            deduction_rows.append({'type': d_type, 'amount_current': new_amt, 'amount_ytd': new_ytd, 'code': row.get('code', '')})
             total_deducs += new_amt
 
     d_df = pd.DataFrame(deduction_rows)
     net = gross - total_deducs
 
-    # --- 3. Build Earnings Rows (With YTD Fix) ---
-    # Helper to find reference data for YTD calc
+    # --- Build Earnings Rows ---
     def get_ref_ytd(type_name, new_current):
         if ref_earnings.empty: return new_current
-        # Fuzzy match the type name
         match = ref_earnings[ref_earnings['type'].str.contains(type_name, case=False, regex=False, na=False)]
         if not match.empty:
             r_ytd = match.iloc[0]['amount_ytd']
             r_curr = match.iloc[0]['amount_current']
             return round(r_ytd - r_curr + new_current, 2)
-        return new_current # If new type, YTD is just the current amount
+        return new_current
 
     rows = []
-    
-    total_reg_hours = t_reg + t_hol_leave
-    total_reg_amt = amt_reg + amt_hol_leave
-    
-    if total_reg_hours > 0:
-        rows.append(["Regular Pay", base_rate, total_reg_hours, total_reg_amt])
-    
-    # List of tuples: (Type, Rate, Hours, Amount)
-    # We use specific keywords that match typical paystub labels to help the helper function find matches
     items = []
-    if t_reg > 0: items.append(("Regular Pay", base_rate, t_reg, amt_reg))
-    if amt_cip: items.append(("Controller Incentive Pay", r_cip, (t_reg + t_hol_leave), amt_cip))
+    
+    # 1. Add the Single Combined Regular Pay Line
+    if total_reg_hours > 0: 
+        items.append(("Regular Pay", base_rate, total_reg_hours, amt_reg_total))
+    
+    if amt_cip: items.append(("Controller Incentive Pay", r_cip, total_reg_hours, amt_cip))
     
     if t_ot:
         items.append(("FLSA Premium", r_flsa, t_ot, amt_flsa))
@@ -369,7 +359,7 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     e_df = pd.DataFrame(rows, columns=['type', 'rate', 'hours_current', 'amount_current', 'amount_ytd'])
     e_df['hours_adjusted'] = 0.0; e_df['amount_adjusted'] = 0.0
 
-    # --- 4. Leave Recalc (Unchanged) ---
+    # Leave Recalc (Unchanged)
     l_rows = []
     target_leaves = ['Annual', 'Sick', 'Credit']
     if not actual_leave.empty:
