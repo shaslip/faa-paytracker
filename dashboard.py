@@ -225,21 +225,23 @@ with tab_audit:
             time_regex = r"^$|^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
             
             # --- FEATURE: Mark Observed Holidays Visually ---
-            # We iterate the dataframe to modify the 'Date' display string for the observed holiday
             conn = models.get_db()
             std_sched = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
             conn.close()
             
-            # Create a display column so we don't break the actual date logic
+            # Create a display column
             ts_v2['Display_Date'] = ts_v2['Date']
             
             for idx, row in ts_v2.iterrows():
                 d_obj = datetime.strptime(row['Date'], "%Y-%m-%d").date()
-                # Run the slide-rule logic to see if this is the "Observed" day
+                
+                # 1. Restore the Day of Week Format (e.g. "10-04 (Sat)")
+                day_str = d_obj.strftime("%m-%d (%a)")
+                ts_v2.at[idx, 'Display_Date'] = day_str
+                
+                # 2. Check Holiday Logic
                 obs_date = logic.get_observed_holiday(d_obj, std_sched)
                 
-                # Check if THIS row is the observed holiday for *some* holiday
-                # (We reverse check: is today the observed date of any holiday?)
                 is_obs = False
                 for h in logic.HOLIDAYS:
                     h_d = datetime.strptime(h, "%Y-%m-%d").date()
@@ -248,8 +250,9 @@ with tab_audit:
                         break
                 
                 if is_obs:
-                    # Add a visual marker
-                    ts_v2.at[idx, 'Display_Date'] = f"{row['Date']} (HOLIDAY) 🎉"
+                    # Append the flag to the formatted string
+                    ts_v2.at[idx, 'Display_Date'] = f"{day_str} (HOLIDAY) 🎉"
+            # ------------------------------------------------
 
             edited = st.data_editor(
                 ts_v2, 
@@ -257,11 +260,11 @@ with tab_audit:
                 hide_index=True,
                 width="stretch",
                 column_config={
-                    "Date": None, # Hide the raw date
-                    "Display_Date": st.column_config.TextColumn("Date (Day)", disabled=True),
+                    "Date": None, 
+                    # Renamed header to be clear
+                    "Display_Date": st.column_config.TextColumn("Date", disabled=True),
                     "Start": st.column_config.TextColumn("Act Start", validate=time_regex),
                     "End": st.column_config.TextColumn("Act End", validate=time_regex),
-                    # --- FIX: Add "Holiday" to options ---
                     "Leave_Type": st.column_config.SelectboxColumn(
                         "Leave Type (if gap)", 
                         options=["Holiday", "Annual", "Sick", "Credit", "Comp", "LWOP"]
@@ -269,9 +272,10 @@ with tab_audit:
                     "OJTI": st.column_config.NumberColumn("OJTI (Hrs)"),
                     "CIC": st.column_config.NumberColumn("CIC (Hrs)")
                 },
-                column_order=["Display_Date", "Start", "End", "Leave_Type", "OJTI", "CIC"] # Use Display_Date
+                column_order=["Display_Date", "Start", "End", "Leave_Type", "OJTI", "CIC"]
             )
             
+            # Restore raw date for saving
             edited['Date'] = ts_v2['Date']
             
             if st.button("💾 Calculate"):
