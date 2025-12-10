@@ -262,14 +262,11 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     t_ojti = buckets_df['OJTI'].sum()
     t_cic = buckets_df['CIC'].sum()
 
-    # --- FIX 2: Aggregate Regular Pay ---
-    # Combine Worked Reg + Holiday Leave into a single "Regular Pay" bucket
+    # Aggregate Regular Pay (Worked + Holiday Leave)
     total_reg_hours = t_reg + t_hol_leave
     amt_reg_total = round(total_reg_hours * base_rate, 2)
     
-    # Base Amounts for diff calcs
-    amt_reg_worked = round(t_reg * base_rate, 2)
-    amt_hol_leave = round(t_hol_leave * base_rate, 2)    
+    # Base Amounts
     amt_true_ot = round(t_ot * base_rate, 2) if t_ot > 0 else 0.0
     
     # Differentials
@@ -289,14 +286,12 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
              hist_reg = reg_row.iloc[0]['amount_current']
              if hist_reg > 0:
                  factor = hist_cip / hist_reg
-                 # Apply to TOTAL basic pay (Worked + Hol Leave)
                  amt_cip = round(amt_reg_total * factor, 2)
                  r_cip = round(base_rate * factor, 2)
 
     # FLSA Calculation
     amt_flsa = 0.0; r_flsa = 0.0
     if t_ot > 0:
-        # Remuneration includes Base (Worked+Leave) + Diffs + CIP
         remun = amt_reg_total + amt_true_ot + amt_night + amt_sun + amt_hol + amt_cip + amt_ojti + amt_cic
         hrs = total_reg_hours + t_ot
         if hrs > 0:
@@ -304,10 +299,9 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
             r_flsa = round(rrp * 0.5, 2)
             amt_flsa = round(t_ot * r_flsa, 2)
 
-    # Calculate Gross
+    # Calculate Gross & Deductions
     gross = amt_reg_total + amt_true_ot + amt_flsa + amt_night + amt_sun + amt_hol + amt_cip + amt_ojti + amt_cic
     
-    # --- Deductions (Same as before) ---
     deduction_rows = []
     total_deducs = 0.0
     PERCENTAGE_BASED = ['Federal Tax', 'State Tax', 'OASDI', 'Medicare', 'FERS', 'TSP'] 
@@ -325,7 +319,9 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
                 effective_rate = ref_amt / ref_gross
                 new_amt = round(gross * effective_rate, 2)
             
-            new_ytd = round(ref_ytd - ref_amt + new_amt, 2)
+            # YTD Logic: If ref_ytd is 0, we assume data is missing/invalid, so we show None
+            new_ytd = round(ref_ytd - ref_amt + new_amt, 2) if ref_ytd > 0 else None
+
             deduction_rows.append({'type': d_type, 'amount_current': new_amt, 'amount_ytd': new_ytd, 'code': row.get('code', '')})
             total_deducs += new_amt
 
@@ -335,19 +331,27 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     # --- Build Earnings Rows ---
     def get_ref_ytd(type_name, new_current):
         if ref_earnings.empty: return new_current
+        # Exact match logic (safer than contains) or fuzzy fallback
         match = ref_earnings[ref_earnings['type'].str.contains(type_name, case=False, regex=False, na=False)]
+        
         if not match.empty:
             r_ytd = match.iloc[0]['amount_ytd']
             r_curr = match.iloc[0]['amount_current']
+            
+            # FIX: If YTD is 0.0 (Partial/Shutdown check), do not do math. Return None.
+            if r_ytd <= 0.01:
+                return None
+                
             return round(r_ytd - r_curr + new_current, 2)
-        return new_current
+            
+        return None # If new item type, YTD is undefined/blank in this context
 
     rows = []
     items = []
     
-    # 1. Add the Single Combined Regular Pay Line
+    # 1. Labels updated to match Standard FAA Paystubs (e.g. "Regular" vs "Regular Pay")
     if total_reg_hours > 0: 
-        items.append(("Regular Pay", base_rate, total_reg_hours, amt_reg_total))
+        items.append(("Regular", base_rate, total_reg_hours, amt_reg_total))
     
     if amt_cip: items.append(("Controller Incentive Pay", r_cip, total_reg_hours, amt_cip))
     
@@ -368,7 +372,7 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     e_df = pd.DataFrame(rows, columns=['type', 'rate', 'hours_current', 'amount_current', 'amount_ytd'])
     e_df['hours_adjusted'] = 0.0; e_df['amount_adjusted'] = 0.0
 
-    # Leave Recalc (Unchanged)
+    # Leave Recalc
     l_rows = []
     target_leaves = ['Annual', 'Sick', 'Credit']
     if not actual_leave.empty:
