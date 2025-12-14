@@ -19,17 +19,25 @@ def setup_database():
         net_pay REAL, gross_pay REAL, total_deductions REAL, agency TEXT, remarks TEXT, file_source TEXT
     )''')
     
-    # 2. Schedule (Default Template)
+    # 2. Schedule (Year Aware)
+    # We now check if the table exists AND has the year column. 
+    # If it's a fresh install, this creates the new structure.
     conn.execute('''CREATE TABLE IF NOT EXISTS user_schedule (
-        day_of_week INTEGER PRIMARY KEY, start_time TEXT, end_time TEXT, is_workday BOOLEAN
+        year INTEGER NOT NULL,
+        day_of_week INTEGER NOT NULL, 
+        start_time TEXT, 
+        end_time TEXT, 
+        is_workday BOOLEAN,
+        PRIMARY KEY (year, day_of_week)
     )''')
     
-    # Seed Schedule if empty
+    # Seed 2025 Schedule if completely empty
     if pd.read_sql("SELECT count(*) as c FROM user_schedule", conn).iloc[0]['c'] == 0:
+        current_year = datetime.now().year
         for i in range(7):
             is_work = i < 5 
-            conn.execute("INSERT INTO user_schedule VALUES (?, ?, ?, ?)", 
-                         (i, "07:00" if is_work else None, "15:00" if is_work else None, is_work))
+            conn.execute("INSERT INTO user_schedule VALUES (?, ?, ?, ?, ?)", 
+                         (current_year, i, "07:00" if is_work else None, "15:00" if is_work else None, is_work))
 
     # 3. Timesheet V2 (Start/End Times)
     conn.execute('''CREATE TABLE IF NOT EXISTS timesheet_entry_v2 (
@@ -40,24 +48,46 @@ def setup_database():
     conn.commit()
     conn.close()
 
-def save_user_schedule(df):
+# --- NEW: Helper to get schedule for a specific year ---
+def get_user_schedule(year=None):
+    if year is None: year = datetime.now().year
+    conn = get_db()
+    df = pd.read_sql("SELECT * FROM user_schedule WHERE year = ?", conn, params=(year,))
+    conn.close()
+    
+    # If no schedule exists for this year, return a blank template
+    if df.empty:
+        data = []
+        for i in range(7):
+            data.append({
+                'year': year, 'day_of_week': i, 
+                'start_time': None, 'end_time': None, 'is_workday': 0
+            })
+        return pd.DataFrame(data)
+    return df
+
+def save_user_schedule(df, year):
+    """Saves schedule for a specific year. Deletes old entries for that year first."""
     conn = get_db()
     c = conn.cursor()
+    
+    # Clear existing entries for THIS year to avoid primary key conflicts on update
+    c.execute("DELETE FROM user_schedule WHERE year = ?", (year,))
+    
     for _, row in df.iterrows():
         s = row['start_time']
         e = row['end_time']
         
-        # If user cleared the cell, it might be None or empty string
+        # Clean inputs
         if s == "" or pd.isna(s): s = None
         if e == "" or pd.isna(e): e = None
         
         is_workday = 1 if s is not None else 0
         
-        # Since input is now TextColumn, s and e are ALREADY strings ("07:00").
-        # We don't need strftime.
-        
-        c.execute("UPDATE user_schedule SET start_time=?, end_time=?, is_workday=? WHERE day_of_week=?", 
-                  (s, e, is_workday, row['day_of_week']))
+        # Insert new row
+        c.execute("INSERT INTO user_schedule (year, day_of_week, start_time, end_time, is_workday) VALUES (?, ?, ?, ?, ?)", 
+                  (year, row['day_of_week'], s, e, is_workday))
+                  
     conn.commit()
     conn.close()
     
@@ -87,7 +117,14 @@ def get_pay_period_dates(period_ending_str):
 
 def load_timesheet_v2(period_ending):
     conn = get_db()
-    defaults = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
+    
+    # 1. Determine Year from period_ending
+    pe_date = datetime.strptime(period_ending, "%Y-%m-%d")
+    target_year = pe_date.year
+    
+    # 2. Fetch specific schedule for that year
+    defaults = pd.read_sql("SELECT * FROM user_schedule WHERE year = ?", conn, params=(target_year,)).set_index('day_of_week')
+    
     saved = pd.read_sql("SELECT * FROM timesheet_entry_v2 WHERE period_ending = ?", conn, params=(period_ending,))
     conn.close()
     
@@ -105,16 +142,17 @@ def load_timesheet_v2(period_ending):
             r = row.iloc[0]
             data.append({
                 "Date": d,
-                "Start": r['start_time'], # String "07:00" or None
-                "End": r['end_time'],     # String "15:00" or None
+                "Start": r['start_time'], 
+                "End": r['end_time'],     
                 "Leave_Type": r['leave_type'],
                 "OJTI": r['ojti_hours'],
                 "CIC": r['cic_hours']
             })
         else:
+            # Check if we have a default schedule for this year
             def_row = defaults.loc[day_idx] if day_idx in defaults.index else None
+            
             if def_row is not None and def_row['is_workday']:
-                # RETURN STRINGS directly from defaults
                 data.append({
                     "Date": d, 
                     "Start": def_row['start_time'], 
@@ -142,13 +180,12 @@ def save_timesheet_v2(period_ending, df):
         if not s_str: s_str = None
         if not e_str: e_str = None
         
-        # --- FIX: Sanitize Leave_Type ---
+        # Clean Leave_Type
         l_type = row['Leave_Type']
         if isinstance(l_type, list): 
             l_type = l_type[0] if l_type else None
         if pd.isna(l_type) or l_type == "": 
             l_type = None
-        # --------------------------------
         
         c.execute("""
             INSERT INTO timesheet_entry_v2 (period_ending, day_date, start_time, end_time, leave_type, ojti_hours, cic_hours)
@@ -188,7 +225,6 @@ def has_saved_timesheet(period_ending):
     """Returns True if the user has explicitly saved a timesheet for this period."""
     conn = get_db()
     c = conn.cursor()
-    # We check if ANY entries exist for this period_ending in the V2 table
     c.execute("SELECT count(*) FROM timesheet_entry_v2 WHERE period_ending = ?", (period_ending,))
     count = c.fetchone()[0]
     conn.close()
