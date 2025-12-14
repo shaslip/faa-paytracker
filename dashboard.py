@@ -136,9 +136,17 @@ with tab_facts:
         # Columns for side-by-side layout
         h_col1, h_col2 = st.columns(2)
         
+        # FIX: Calculate exact height to remove scrollbar (Rows + Header * 35px)
+        t_height = (len(df_actual) + 1) * 35
+
         with h_col1:
             st.caption("**Actual Calendar**")
-            st.dataframe(df_actual, hide_index=True, width='stretch')
+            st.dataframe(
+                df_actual, 
+                hide_index=True, 
+                use_container_width=True, 
+                height=t_height
+            )
             
         with h_col2:
             st.caption("**Mine (Observed)**")
@@ -149,8 +157,9 @@ with tab_facts:
             st.dataframe(
                 df_mine.style.apply(highlight_adj, axis=1), 
                 hide_index=True, 
-                width='stretch',
-                column_config={"Adjusted": None} # Hide the boolean helper column
+                use_container_width=True,
+                column_config={"Adjusted": None}, # Hide the boolean helper column
+                height=t_height
             )
     else:
         st.error(f"No holiday data found for {selected_year} in holidays.json")
