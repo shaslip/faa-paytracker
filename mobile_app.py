@@ -102,24 +102,64 @@ def main(page: ft.Page):
 
         txt_date.value = new_date.strftime("%Y-%m-%d")
         
-        # Auto-Fill Logic
+        # --- NEW AUTO-FILL HIERARCHY ---
         day_idx = new_date.weekday()
         target_year = new_date.year
-        conn = sqlite3.connect(DB_NAME)
-        row = conn.execute(
-            "SELECT start_time, end_time FROM schedule_defaults WHERE year=? AND day_idx=?", 
-            (target_year, day_idx)
-        ).fetchone()
-        conn.close()
+        date_str = txt_date.value
         
-        if row:
-            txt_start.value = row[0] if row[0] else ""
-            txt_end.value = row[1] if row[1] else ""
-            lbl_status.value = "Hours auto-filled."
+        conn = sqlite3.connect(DB_NAME)
+        conn.row_factory = sqlite3.Row # Helper to access by name
+        
+        # 1. Check Offline Queue (Pending Local Edits) - Highest Priority
+        row_q = conn.execute("SELECT * FROM offline_queue WHERE day_date=?", (date_str,)).fetchone()
+        
+        # 2. Check Server Actuals (Downloaded Desktop Overrides) - Medium Priority
+        row_act = conn.execute("SELECT * FROM server_actuals WHERE day_date=?", (date_str,)).fetchone()
+        
+        # 3. Check Defaults (Template) - Lowest Priority
+        row_def = conn.execute("SELECT start_time, end_time FROM schedule_defaults WHERE year=? AND day_idx=?", (target_year, day_idx)).fetchone()
+        
+        conn.close()
+
+        # APPLY LOGIC
+        if row_q:
+            # We have a local draft waiting to sync
+            txt_start.value = row_q['start_time'] if row_q['start_time'] else ""
+            txt_end.value = row_q['end_time'] if row_q['end_time'] else ""
+            txt_ojti.value = str(row_q['ojti_hours']) if row_q['ojti_hours'] > 0 else ""
+            txt_cic.value = str(row_q['cic_hours']) if row_q['cic_hours'] > 0 else ""
+            dd_leave.value = row_q['leave_type'] if row_q['leave_type'] else "None"
+            lbl_status.value = "Loaded local draft."
+            lbl_status.color = "orange"
+            
+        elif row_act:
+            # We have a saved shift from the desktop (e.g. Saturday OT)
+            txt_start.value = row_act['start_time'] if row_act['start_time'] else ""
+            txt_end.value = row_act['end_time'] if row_act['end_time'] else ""
+            # Optional: fill other fields if you want, usually times are the critical part
+            txt_ojti.value = str(row_act['ojti_hours']) if row_act['ojti_hours'] > 0 else ""
+            txt_cic.value = str(row_act['cic_hours']) if row_act['cic_hours'] > 0 else ""
+            dd_leave.value = row_act['leave_type'] if row_act['leave_type'] else "None"
+            lbl_status.value = "Loaded from Desktop."
             lbl_status.color = "blue"
+            
+        elif row_def:
+            # Fallback to standard schedule
+            txt_start.value = row_def['start_time'] if row_def['start_time'] else ""
+            txt_end.value = row_def['end_time'] if row_def['end_time'] else ""
+            txt_ojti.value = ""
+            txt_cic.value = ""
+            dd_leave.value = "None"
+            lbl_status.value = "Standard Schedule."
+            lbl_status.color = "grey"
         else:
+            # Clear everything
             txt_start.value = ""
             txt_end.value = ""
+            txt_ojti.value = ""
+            txt_cic.value = ""
+            dd_leave.value = "None"
+            
         page.update()
 
     date_picker = ft.DatePicker(
