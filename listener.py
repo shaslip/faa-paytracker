@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import sqlite3
 import pandas as pd
-from datetime import datetime, timedelta  # Added timedelta
+from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
 DB_NAME = 'payroll_audit.db' 
@@ -12,7 +12,6 @@ HOST = "0.0.0.0"
 PORT = 5000
 
 # REFERENCE DATE: A known Pay Period End date (e.g., Dec 14, 2024)
-# Used to calculate future cycles mathematically.
 REF_DATE = datetime.strptime("2024-12-14", "%Y-%m-%d")
 
 app = FastAPI()
@@ -43,33 +42,6 @@ async def ingest_mobile_data(entries: List[ShiftEntry]):
             dt_obj = datetime.strptime(dt_str, "%Y-%m-%d")
 
             # --- Mathematical Pay Period Calculation ---
-            # Calculates days since reference to find the next 14-day cycle end
-            delta_days = (dt_obj - REF_DATE).days
-            
-            # Logic: (Delta // 14) + 1 gives the next cycle index
-            # If date matches REF_DATE exactly, delta is 0, index is 1 (next period end is +14 days)
-            # Actually, if date is ON the PPE, it belongs to that PPE. 
-            # We need to ensure the period_ending date is >= day_date.
-            
-            # We assume REF_DATE is a valid Period Ending.
-            # If dt_obj is REF_DATE, period_ending is REF_DATE.
-            # If dt_obj is REF_DATE + 1, period_ending is REF_DATE + 14.
-            
-            days_into_cycle = delta_days % 14
-            # If days_into_cycle is 0 (it matches a PPE), offset is 0. 
-            # If it's 1 day past, we need 13 days to reach next PPE.
-            
-            days_to_add = (14 - days_into_cycle) if days_into_cycle != 0 else 0
-            
-            # Correction: Wait, if delta is negative (past), this math holds?
-            # Simpler approach: find the ceiling multiple of 14 relative to reference
-            
-            # If dt_obj > REF_DATE:
-            # target = REF_DATE + ceil((dt - ref) / 14) * 14 ??
-            
-            # Let's use the simplest logic:
-            # We want the nearest date >= dt_obj that matches (REF_DATE + N*14)
-            
             diff = (dt_obj - REF_DATE).days
             remainder = diff % 14
             if remainder == 0:
@@ -113,16 +85,22 @@ async def ingest_mobile_data(entries: List[ShiftEntry]):
         conn.close()
 
 @app.get("/get_schedule_defaults")
-async def get_schedule_defaults():
+async def get_schedule_defaults(year: Optional[int] = None):
     """
-    Returns the standard schedule from the 'user_schedule' table.
+    Returns the standard schedule. Defaults to current year if not specified.
     """
+    # FIX: Default to current year if mobile app doesn't send one
+    target_year = year if year else datetime.now().year
+    
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     try:
-        # Query the exact table used by your Dashboard
-        rows = c.execute("SELECT day_of_week, start_time, end_time FROM user_schedule ORDER BY day_of_week").fetchall()
+        # FIX: Filter by YEAR to prevent duplicate rows from different years
+        rows = c.execute(
+            "SELECT day_of_week, start_time, end_time FROM user_schedule WHERE year = ? ORDER BY day_of_week", 
+            (target_year,)
+        ).fetchall()
         
         schedule = {}
         for row in rows:
