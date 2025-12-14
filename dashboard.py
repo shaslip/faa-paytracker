@@ -222,6 +222,12 @@ with tab_audit:
         # 3. V2 Editor
         with st.expander("📝 Edit Schedule (Actual Worked)", expanded=True):
             ts_v2 = models.load_timesheet_v2(pe)
+            pe_year = datetime.strptime(pe, "%Y-%m-%d").year
+            std_sched = models.get_user_schedule(pe_year).set_index('day_of_week')
+            
+            all_holidays = logic.load_holidays()
+            # Flatten dictionary values into a single list of strings
+            flat_holidays = [h for sublist in all_holidays.values() for h in sublist]
 
             # --- HELPER FUNCTIONS FOR TIME CONVERSION ---
             def float_to_hhmm(val):
@@ -365,7 +371,7 @@ with tab_audit:
                 obs_date = logic.get_observed_holiday(d_obj, std_sched)
                 
                 is_obs = False
-                for h in logic.HOLIDAYS:
+                for h in flat_holidays:
                     h_d = datetime.strptime(h, "%Y-%m-%d").date()
                     if logic.get_observed_holiday(h_d, std_sched) == d_obj:
                         is_obs = True
@@ -408,10 +414,6 @@ with tab_audit:
                 calc_df['CIC'] = calc_df['CIC'].apply(hhmm_to_float)
 
                 models.save_timesheet_v2(pe, calc_df)
-                
-                conn = models.get_db()
-                std_sched = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
-                conn.close()
                 
                 bucket_rows = []
                 for _, row in calc_df.iterrows():
