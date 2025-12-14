@@ -60,7 +60,7 @@ st.set_page_config(page_title="FAA PayTracker", layout="wide")
 st.markdown(views.get_css(), unsafe_allow_html=True)
 models.setup_database()
 
-tab_audit, tab_graphs, tab_facts, tab_ingest = st.tabs(["🧐 Audit & Time", "📊 Graphs", "ℹ️ Basic Facts", "📥 Ingestion"])
+tab_audit, tab_graphs, tab_facts, tab_ingest = st.tabs(["🧐 Audit & Time", "📊 Statistics & Graphs", "ℹ️ Basic Facts", "📥 Ingestion"])
 
 # --- TAB: BASIC FACTS (Schedule & Holidays) ---
 with tab_facts:
