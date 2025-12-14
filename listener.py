@@ -112,6 +112,40 @@ async def get_schedule_defaults():
     finally:
         conn.close()
 
+@app.get("/get_saved_shifts")
+async def get_saved_shifts(year: Optional[int] = None):
+    """
+    Returns ACTUAL saved shifts (timesheet_entry_v2) for the given year.
+    This allows the mobile app to know about manual overrides (like OT on an RDO).
+    """
+    target_year = year if year else datetime.now().year
+    
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    try:
+        # Get all saved shifts for this year
+        # We filter by period_ending string matching the year
+        c.execute("SELECT day_date, start_time, end_time, leave_type, ojti_hours, cic_hours FROM timesheet_entry_v2 WHERE period_ending LIKE ?", (f"{target_year}%",))
+        rows = c.fetchall()
+        
+        data = []
+        for r in rows:
+            data.append({
+                "date": r['day_date'],
+                "start": r['start_time'],
+                "end": r['end_time'],
+                "leave": r['leave_type'],
+                "ojti": r['ojti_hours'],
+                "cic": r['cic_hours']
+            })
+        return data
+    except Exception as e:
+        print(f"Error serving saved shifts: {e}")
+        return []
+    finally:
+        conn.close()
+
 @app.get("/get_holidays")
 async def get_holidays(year: Optional[int] = None):
     """
