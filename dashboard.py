@@ -94,7 +94,7 @@ with tab_facts:
     edited_sched = st.data_editor(
         sched_df,
         hide_index=True,
-        width=None, # let streamlit decide width
+        width="stretch", 
         column_config={
             "day_of_week": None, 
             "Day": st.column_config.TextColumn(disabled=True),
