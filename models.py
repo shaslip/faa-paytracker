@@ -78,6 +78,13 @@ def save_user_schedule(df, year):
         s = row['start_time']
         e = row['end_time']
         
+        # --- FIX: Handle Lists returned by Streamlit Editor ---
+        if isinstance(s, list): 
+            s = s[0] if len(s) > 0 else None
+        if isinstance(e, list): 
+            e = e[0] if len(e) > 0 else None
+        # ----------------------------------------------------
+
         # Clean inputs
         if s == "" or pd.isna(s): s = None
         if e == "" or pd.isna(e): e = None
