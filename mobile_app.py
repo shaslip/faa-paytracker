@@ -6,7 +6,9 @@ import os
 from datetime import datetime
 
 # --- CONFIGURATION ---
-DESKTOP_URL = "http://10.0.0.77:5000" 
+# Default fallback if nothing is saved in settings
+DEFAULT_IP = "http://10.0.0.77:5000"
+
 if "ANDROID_ARGUMENT" in os.environ:
     files_dir = os.environ.get("EXTERNAL_FILES_DIR", ".")
     DB_NAME = os.path.join(files_dir, "mobile_data.db")
@@ -66,14 +68,56 @@ def main(page: ft.Page):
     
     init_db()
 
+    # --- SETTINGS LOGIC ---
+    # Load IP from storage or use default
+    stored_ip = page.client_storage.get("server_ip")
+    current_ip = stored_ip if stored_ip else DEFAULT_IP
+
+    def get_url():
+        return current_ip
+
+    def save_settings(e):
+        nonlocal current_ip
+        new_ip = txt_ip.value.strip()
+        # Simple validation to ensure they didn't forget http
+        if not new_ip.startswith("http"):
+            new_ip = "http://" + new_ip
+        
+        page.client_storage.set("server_ip", new_ip)
+        current_ip = new_ip
+        settings_dialog.open = False
+        lbl_status.value = f"IP Saved: {current_ip}"
+        lbl_status.color = "blue"
+        page.update()
+
+    txt_ip = ft.TextField(label="Server URL", value=current_ip)
+    settings_dialog = ft.AlertDialog(
+        title=ft.Text("Settings"),
+        content=txt_ip,
+        actions=[
+            ft.TextButton("Save", on_click=save_settings),
+            ft.TextButton("Cancel", on_click=lambda e: setattr(settings_dialog, 'open', False) or page.update()),
+        ],
+    )
+    page.overlay.append(settings_dialog)
+
+    # --- APP BAR (Settings Icon) ---
+    page.appbar = ft.AppBar(
+        title=ft.Text("FAA PayTracker"),
+        center_title=False,
+        bgcolor=ft.Colors.BLUE_GREY_50,
+        actions=[
+            ft.IconButton(ft.Icons.SETTINGS, on_click=lambda e: setattr(settings_dialog, 'open', True) or page.update())
+        ],
+    )
+
     # --- SHARED UI COMPONENTS ---
     lbl_status = ft.Text(value="Ready", color="grey")
 
     # ==========================================
-    # TAB 1: ADD SHIFT (Restored Functional UI)
+    # TAB 1: ADD SHIFT
     # ==========================================
     
-    # 1. Date
     txt_date = ft.TextField(
         label="Date", 
         value=datetime.now().strftime("%Y-%m-%d"), 
@@ -90,11 +134,9 @@ def main(page: ft.Page):
         e.control.data = len(e.control.value)
 
     def change_date(e):
-        # FIX: Handle case where date_picker.value is None (e.g., app startup or programmatic call)
         if date_picker.value:
             new_date = date_picker.value
         else:
-            # Fallback to the text field or today
             try:
                 new_date = datetime.strptime(txt_date.value, "%Y-%m-%d")
             except:
@@ -102,28 +144,20 @@ def main(page: ft.Page):
 
         txt_date.value = new_date.strftime("%Y-%m-%d")
         
-        # --- NEW AUTO-FILL HIERARCHY ---
         day_idx = new_date.weekday()
         target_year = new_date.year
         date_str = txt_date.value
         
         conn = sqlite3.connect(DB_NAME)
-        conn.row_factory = sqlite3.Row # Helper to access by name
+        conn.row_factory = sqlite3.Row 
         
-        # 1. Check Offline Queue (Pending Local Edits) - Highest Priority
         row_q = conn.execute("SELECT * FROM offline_queue WHERE day_date=?", (date_str,)).fetchone()
-        
-        # 2. Check Server Actuals (Downloaded Desktop Overrides) - Medium Priority
         row_act = conn.execute("SELECT * FROM server_actuals WHERE day_date=?", (date_str,)).fetchone()
-        
-        # 3. Check Defaults (Template) - Lowest Priority
         row_def = conn.execute("SELECT start_time, end_time FROM schedule_defaults WHERE year=? AND day_idx=?", (target_year, day_idx)).fetchone()
         
         conn.close()
 
-        # APPLY LOGIC
         if row_q:
-            # We have a local draft waiting to sync
             txt_start.value = row_q['start_time'] if row_q['start_time'] else ""
             txt_end.value = row_q['end_time'] if row_q['end_time'] else ""
             txt_ojti.value = str(row_q['ojti_hours']) if row_q['ojti_hours'] > 0 else ""
@@ -131,20 +165,15 @@ def main(page: ft.Page):
             dd_leave.value = row_q['leave_type'] if row_q['leave_type'] else "None"
             lbl_status.value = "Loaded local draft."
             lbl_status.color = "orange"
-            
         elif row_act:
-            # We have a saved shift from the desktop (e.g. Saturday OT)
             txt_start.value = row_act['start_time'] if row_act['start_time'] else ""
             txt_end.value = row_act['end_time'] if row_act['end_time'] else ""
-            # Optional: fill other fields if you want, usually times are the critical part
             txt_ojti.value = str(row_act['ojti_hours']) if row_act['ojti_hours'] > 0 else ""
             txt_cic.value = str(row_act['cic_hours']) if row_act['cic_hours'] > 0 else ""
             dd_leave.value = row_act['leave_type'] if row_act['leave_type'] else "None"
             lbl_status.value = "Loaded from Desktop."
             lbl_status.color = "blue"
-            
         elif row_def:
-            # Fallback to standard schedule
             txt_start.value = row_def['start_time'] if row_def['start_time'] else ""
             txt_end.value = row_def['end_time'] if row_def['end_time'] else ""
             txt_ojti.value = ""
@@ -153,7 +182,6 @@ def main(page: ft.Page):
             lbl_status.value = "Standard Schedule."
             lbl_status.color = "grey"
         else:
-            # Clear everything
             txt_start.value = ""
             txt_end.value = ""
             txt_ojti.value = ""
@@ -174,7 +202,6 @@ def main(page: ft.Page):
         on_click=lambda _: setattr(date_picker, 'open', True) or page.update()
     )
 
-    # 2. Inputs
     txt_start = ft.TextField(label="Start (HH:MM)", hint_text="07:00", width=160, on_change=auto_colon)
     txt_end = ft.TextField(label="End (HH:MM)", hint_text="15:00", width=160, on_change=auto_colon)
 
@@ -192,7 +219,6 @@ def main(page: ft.Page):
     txt_ojti = ft.TextField(label="OJTI (HH:MM)", width=160, on_change=auto_colon)
     txt_cic = ft.TextField(label="CIC (HH:MM)", width=160, on_change=auto_colon)
 
-    # 3. Actions
     def save_local_click(e):
         try:
             def parse_time(val):
@@ -223,6 +249,10 @@ def main(page: ft.Page):
 
             lbl_status.value = f"Saved {txt_date.value}"
             lbl_status.color = "green"
+            
+            # Refresh Pending Tab
+            load_pending_queue()
+            
         except Exception as err:
             lbl_status.value = f"Error: {str(err)}"
             lbl_status.color = "red"
@@ -238,7 +268,8 @@ def main(page: ft.Page):
             
             if rows:
                 payload = [dict(r) for r in rows]
-                r = requests.post(f"{DESKTOP_URL}/mobile_sync", json=payload, timeout=5)
+                # USE DYNAMIC URL
+                r = requests.post(f"{get_url()}/mobile_sync", json=payload, timeout=5)
                 if r.status_code == 200:
                     conn.execute("DELETE FROM offline_queue")
                     conn.commit()
@@ -250,8 +281,12 @@ def main(page: ft.Page):
             else:
                 lbl_status.value = "Queue empty."
             conn.close()
+            
+            # Refresh Pending Tab
+            load_pending_queue()
+            
         except Exception as err:
-            lbl_status.value = "Connection Failed"
+            lbl_status.value = f"Connection Failed: {str(err)}"
             lbl_status.color = "red"
         page.update()
 
@@ -259,8 +294,8 @@ def main(page: ft.Page):
         lbl_status.value = "Downloading Data..."
         page.update()
         try:
-            # 1. Defaults (Keep existing logic)
-            r_sched = requests.get(f"{DESKTOP_URL}/get_schedule_defaults", timeout=5)
+            # 1. Defaults
+            r_sched = requests.get(f"{get_url()}/get_schedule_defaults", timeout=5)
             conn = sqlite3.connect(DB_NAME)
             if r_sched.status_code == 200:
                 conn.execute("DELETE FROM schedule_defaults")
@@ -268,8 +303,8 @@ def main(page: ft.Page):
                     conn.execute("INSERT INTO schedule_defaults VALUES (?,?,?,?)", 
                                  (i['year'], i['day'], i['start'], i['end']))
             
-            # 2. NEW: Get Actual Saved Shifts (The OT Overrides)
-            r_shifts = requests.get(f"{DESKTOP_URL}/get_saved_shifts?year={datetime.now().year}", timeout=5)
+            # 2. Saved Shifts
+            r_shifts = requests.get(f"{get_url()}/get_saved_shifts?year={datetime.now().year}", timeout=5)
             if r_shifts.status_code == 200:
                 conn.execute("DELETE FROM server_actuals")
                 for s in r_shifts.json():
@@ -278,15 +313,21 @@ def main(page: ft.Page):
                         VALUES (?, ?, ?, ?, ?, ?)
                     """, (s['date'], s['start'], s['end'], s['leave'], s['ojti'], s['cic']))
 
-            # 3. Holidays (Keep existing logic)
-            # ... (your holiday code here) ...
+            # 3. Holidays
+            conn.execute("DELETE FROM holiday_cache")
+            years = [datetime.now().year, datetime.now().year + 1]
+            for y in years:
+                r_hol = requests.get(f"{get_url()}/get_holidays?year={y}", timeout=5)
+                if r_hol.status_code == 200:
+                    for h in r_hol.json():
+                        conn.execute("INSERT INTO holiday_cache VALUES (?,?,?,?)", 
+                                     (h['year'], h['name'], h['date'], h['day']))
             
             conn.commit()
             conn.close()
             lbl_status.value = "Updates Downloaded!"
             lbl_status.color = "green"
             
-            # Refresh views
             load_holidays_from_db()
             change_date(None)
             
@@ -295,7 +336,6 @@ def main(page: ft.Page):
             lbl_status.color = "red"
         page.update()
 
-    # Layout Tab 1
     tab_shift_content = ft.Container(
         padding=10,
         content=ft.Column([
@@ -317,9 +357,8 @@ def main(page: ft.Page):
     )
 
     # ==========================================
-    # TAB 2: HOLIDAYS (Functional List)
+    # TAB 2: HOLIDAYS
     # ==========================================
-    
     holiday_table = ft.DataTable(
         columns=[
             ft.DataColumn(ft.Text("Holiday")),
@@ -358,12 +397,53 @@ def main(page: ft.Page):
         ])
     )
 
+    # ==========================================
+    # TAB 3: PENDING (New)
+    # ==========================================
+    pending_table = ft.DataTable(
+        columns=[
+            ft.DataColumn(ft.Text("Date")),
+            ft.DataColumn(ft.Text("Start")),
+            ft.DataColumn(ft.Text("End")),
+            ft.DataColumn(ft.Text("Leave")),
+        ],
+        width=400,
+        heading_row_color=ft.Colors.GREY_200,
+    )
+
+    def load_pending_queue():
+        conn = sqlite3.connect(DB_NAME)
+        rows = conn.execute("SELECT day_date, start_time, end_time, leave_type FROM offline_queue ORDER BY day_date DESC").fetchall()
+        conn.close()
+
+        pending_table.rows.clear()
+        for d, s, e, l in rows:
+            pending_table.rows.append(
+                ft.DataRow(cells=[
+                    ft.DataCell(ft.Text(d, weight="bold")),
+                    ft.DataCell(ft.Text(s if s else "-")),
+                    ft.DataCell(ft.Text(e if e else "-")),
+                    ft.DataCell(ft.Text(l if l else "-")),
+                ])
+            )
+        page.update()
+
+    tab_pending_content = ft.Container(
+        padding=10,
+        content=ft.Column([
+            ft.Text("Pending Sync", size=20, weight="bold"),
+            ft.Divider(),
+            ft.Column([pending_table], scroll=ft.ScrollMode.ADAPTIVE, height=600)
+        ])
+    )
+
     # --- MAIN TABS ---
     t = ft.Tabs(
         selected_index=0,
         animation_duration=300,
         tabs=[
             ft.Tab(text="Add Shift", icon=ft.Icons.ADD_TASK, content=tab_shift_content),
+            ft.Tab(text="Pending", icon=ft.Icons.PENDING_ACTIONS, content=tab_pending_content),
             ft.Tab(text="Holidays", icon=ft.Icons.CALENDAR_MONTH, content=tab_holidays_content),
         ],
         expand=1,
@@ -371,6 +451,7 @@ def main(page: ft.Page):
 
     page.add(t)
     load_holidays_from_db()
+    load_pending_queue()
 
 if __name__ == "__main__":
     ft.app(target=main)
