@@ -138,9 +138,30 @@ with tab_audit:
     stubs = models.get_paystubs_meta()
     
     # --- LOGIC: Predict Future Periods (Projected #1 and #2) ---
-    # We need 2 future periods to cover the "Gap Week" where the current pay period 
-    # has ended but the official stub hasn't been released yet.
     if not stubs.empty:
+        # Sort history first to find the most recent real date
+        stubs = stubs.sort_values('period_ending', ascending=False)
+        last_pe_str = stubs.iloc[0]['period_ending']
+        last_dt = datetime.strptime(last_pe_str, "%Y-%m-%d")
+        
+        future_rows = []
+        for i in range(1, 3): # Generate +14 days (ID -1) and +28 days (ID -2)
+            fut_dt = last_dt + timedelta(days=14 * i)
+            fut_pe = fut_dt.strftime("%Y-%m-%d")
+            future_rows.append({
+                'id': -1 * i, 
+                'pay_date': 'Pending', 
+                'period_ending': fut_pe, 
+                'net_pay': 0.0, 
+                'gross_pay': 0.0, 
+                'file_source': 'Projected'
+            })
+            
+        future_df = pd.DataFrame(future_rows)
+        stubs = pd.concat([future_df, stubs], ignore_index=True)
+        
+        # --- FIX: Sort FINAL dataframe by date descending ---
+        # This ensures 2026 dates (ID -2) appear above 2025 dates (ID -1)
         stubs = stubs.sort_values('period_ending', ascending=False)
         last_pe_str = stubs.iloc[0]['period_ending']
         last_dt = datetime.strptime(last_pe_str, "%Y-%m-%d")
