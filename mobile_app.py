@@ -113,15 +113,25 @@ def main(page: ft.Page):
     )
 
     # 4. Differentials - REVERTED to ft.KeyboardType.NUMBER
-    txt_ojti = ft.TextField(label="OJTI (Hrs)", value="0", keyboard_type=ft.KeyboardType.NUMBER, width=160)
-    txt_cic = ft.TextField(label="CIC (Hrs)", value="0", keyboard_type=ft.KeyboardType.NUMBER, width=160)
+    txt_ojti = ft.TextField(label="OJTI (HH:MM)", value="00:00", width=160)
+    txt_cic = ft.TextField(label="CIC (HH:MM)", value="00:00", width=160)
 
     # --- ACTIONS ---
 
     def save_local_click(e):
         try:
-            ojti = float(txt_ojti.value) if txt_ojti.value else 0.0
-            cic = float(txt_cic.value) if txt_cic.value else 0.0
+            # Helper: Converts "1:30" or "1.5" to decimal hours (1.5)
+            def parse_time(val):
+                val = val.strip()
+                if not val: return 0.0
+                if ":" in val:
+                    parts = val.split(":")
+                    if len(parts) != 2: raise ValueError(f"Invalid format: {val}")
+                    return float(parts[0]) + (float(parts[1]) / 60.0)
+                return float(val)
+
+            ojti = parse_time(txt_ojti.value)
+            cic = parse_time(txt_cic.value)
             
             # REVERTED: Original logic
             leave_val = dd_leave.value
