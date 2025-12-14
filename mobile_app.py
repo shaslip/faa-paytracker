@@ -63,6 +63,21 @@ def main(page: ft.Page):
         expand=True
     )
 
+    def auto_colon(e):
+        # We store the previous length in .data to detect backspacing
+        prev_len = e.control.data if e.control.data is not None else 0
+        val = e.control.value
+        
+        # Only add colon if user is typing FORWARD (length increased)
+        if len(val) == 2 and len(val) > prev_len:
+            # Ensure they typed numbers
+            if val.isdigit():
+                e.control.value = val + ":"
+                e.control.update()
+        
+        # Update current length for the next keystroke check
+        e.control.data = len(e.control.value)
+
     def change_date(e):
         # 1. Update text
         new_date = date_picker.value
@@ -103,8 +118,18 @@ def main(page: ft.Page):
     )
 
     # 2. Shift Times
-    txt_start = ft.TextField(label="Start (HH:MM)", hint_text="14:30", width=160)
-    txt_end = ft.TextField(label="End (HH:MM)", hint_text="22:30", width=160)
+    txt_start = ft.TextField(
+        label="Start (HH:MM)", 
+        hint_text="14:30", 
+        width=160, 
+        on_change=auto_colon
+    )
+    txt_end = ft.TextField(
+        label="End (HH:MM)", 
+        hint_text="22:30", 
+        width=160, 
+        on_change=auto_colon
+    )
 
     # 3. Leave Type
     dd_leave = ft.Dropdown(
@@ -122,8 +147,18 @@ def main(page: ft.Page):
     )
 
     # 4. Differentials - REVERTED to ft.KeyboardType.NUMBER
-    txt_ojti = ft.TextField(label="OJTI (HH:MM)", value="00:00", width=160)
-    txt_cic = ft.TextField(label="CIC (HH:MM)", value="00:00", width=160)
+    txt_ojti = ft.TextField(
+        label="OJTI (HH:MM)", 
+        value="",
+        width=160, 
+        on_change=auto_colon
+    )
+    txt_cic = ft.TextField(
+        label="CIC (HH:MM)", 
+        value="", 
+        width=160, 
+        on_change=auto_colon
+    )
 
     # --- ACTIONS ---
 
