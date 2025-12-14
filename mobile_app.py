@@ -5,11 +5,10 @@ import json
 from datetime import datetime
 
 # --- CONFIGURATION ---
-DESKTOP_URL = "http://10.0.0.77:5000/mobile_sync"
+DESKTOP_URL = "http://10.0.0.77:5000" 
 DB_NAME = "mobile_data.db"
 
 def init_db():
-    """Initialize local DB matching the timesheet_entry_v2 schema."""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute('''
@@ -24,6 +23,14 @@ def init_db():
             timestamp TEXT
         )
     ''')
+    # NEW: Table for storing the downloaded schedule
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS schedule_defaults (
+            day_idx INTEGER PRIMARY KEY,
+            start_time TEXT,
+            end_time TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -36,7 +43,6 @@ def main(page: ft.Page):
     init_db()
 
     # --- UI COMPONENTS ---
-    
     lbl_status = ft.Text(value="Ready", color="grey")
 
     # 1. Date
@@ -49,7 +55,26 @@ def main(page: ft.Page):
     )
 
     def change_date(e):
-        txt_date.value = date_picker.value.strftime("%Y-%m-%d")
+        # 1. Update text
+        new_date = date_picker.value
+        txt_date.value = new_date.strftime("%Y-%m-%d")
+        
+        # 2. NEW: Auto-Fill Logic
+        day_idx = new_date.weekday() # 0=Mon
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        row = c.execute("SELECT start_time, end_time FROM schedule_defaults WHERE day_idx=?", (day_idx,)).fetchone()
+        conn.close()
+        
+        if row:
+            txt_start.value = row[0] if row[0] else ""
+            txt_end.value = row[1] if row[1] else ""
+            lbl_status.value = "Hours auto-filled."
+            lbl_status.color = "blue"
+        else:
+            txt_start.value = ""
+            txt_end.value = ""
+
         page.update()
 
     date_picker = ft.DatePicker(
@@ -65,21 +90,21 @@ def main(page: ft.Page):
 
     btn_pick_date = ft.IconButton(
         icon=ft.Icons.CALENDAR_MONTH,
-        on_click=open_picker  # Use the new handler here
+        on_click=open_picker
     )
 
-    # 2. Shift Times (Start/End)
+    # 2. Shift Times
     txt_start = ft.TextField(label="Start (HH:MM)", hint_text="14:30", width=160)
     txt_end = ft.TextField(label="End (HH:MM)", hint_text="22:30", width=160)
 
-    # 3. Leave Type (Matches dashboard.py options)
+    # 3. Leave Type
     dd_leave = ft.Dropdown(
         label="Leave Type (Optional)",
         options=[
-            ft.dropdown.Option("None"), # Maps to None/Work
+            ft.dropdown.Option("None"),
             ft.dropdown.Option("Annual"),
             ft.dropdown.Option("Sick"),
-            ft.dropdown.Option("Holiday"), # Added per your request
+            ft.dropdown.Option("Holiday"),
             ft.dropdown.Option("Credit"),
             ft.dropdown.Option("Comp"),
             ft.dropdown.Option("LWOP"),
@@ -87,7 +112,7 @@ def main(page: ft.Page):
         value="None"
     )
 
-    # 4. Differentials
+    # 4. Differentials - REVERTED to ft.KeyboardType.NUMBER
     txt_ojti = ft.TextField(label="OJTI (Hrs)", value="0", keyboard_type=ft.KeyboardType.NUMBER, width=160)
     txt_cic = ft.TextField(label="CIC (Hrs)", value="0", keyboard_type=ft.KeyboardType.NUMBER, width=160)
 
@@ -95,16 +120,17 @@ def main(page: ft.Page):
 
     def save_local_click(e):
         try:
-            # Basic validation
             ojti = float(txt_ojti.value) if txt_ojti.value else 0.0
             cic = float(txt_cic.value) if txt_cic.value else 0.0
             
+            # REVERTED: Original logic
             leave_val = dd_leave.value
             if leave_val == "None": leave_val = None
 
-            # Enforce 24h time format length check
             s_val = txt_start.value.strip()
             e_val = txt_end.value.strip()
+            
+            # REVERTED: Restored validation
             if s_val and len(s_val) != 5: raise ValueError("Start Time must be HH:MM")
             if e_val and len(e_val) != 5: raise ValueError("End Time must be HH:MM")
 
@@ -119,14 +145,14 @@ def main(page: ft.Page):
             conn.close()
 
             lbl_status.value = f"Saved {txt_date.value}"
-            lbl_status.color="green"
+            lbl_status.color = "green"
             
         except ValueError as ve:
             lbl_status.value = str(ve)
-            lbl_status.color="red"
+            lbl_status.color = "red"
         except Exception as err:
             lbl_status.value = f"Error: {str(err)}"
-            lbl_status.color="red"
+            lbl_status.color = "red"
         
         page.update()
 
@@ -148,24 +174,54 @@ def main(page: ft.Page):
         payload = [dict(row) for row in rows]
 
         try:
-            # Post to new desktop endpoint
-            response = requests.post(DESKTOP_URL, json=payload, timeout=5)
+            # CHANGED: Appending endpoint to base URL
+            response = requests.post(f"{DESKTOP_URL}/mobile_sync", json=payload, timeout=5)
 
             if response.status_code == 200:
                 c.execute("DELETE FROM offline_queue")
                 conn.commit()
                 lbl_status.value = f"Synced {len(rows)} entries."
-                lbl_status.color="green"
+                lbl_status.color = "green"
             else:
+                # REVERTED: Variable name 'response'
                 lbl_status.value = f"Server Error: {response.status_code}"
-                lbl_status.color="red"
+                lbl_status.color = "red"
 
         except Exception as err:
-            lbl_status.value = "Sync Failed. Check Wi-Fi / IP."
-            lbl_status.color="red"
+            lbl_status.value = "Sync Failed."
+            lbl_status.color = "red"
         finally:
             conn.close()
             page.update()
+
+    # NEW: Function to get defaults
+    def get_defaults_click(e):
+        lbl_status.value = "Downloading defaults..."
+        page.update()
+        try:
+            # Calls the new endpoint
+            response = requests.get(f"{DESKTOP_URL}/get_schedule_defaults", timeout=5)
+            
+            if response.status_code == 200:
+                data = response.json()
+                conn = sqlite3.connect(DB_NAME)
+                c = conn.cursor()
+                c.execute("DELETE FROM schedule_defaults")
+                
+                for day_idx, times in data.items():
+                    c.execute("INSERT INTO schedule_defaults (day_idx, start_time, end_time) VALUES (?, ?, ?)",
+                              (int(day_idx), times['start'], times['end']))
+                conn.commit()
+                conn.close()
+                lbl_status.value = "Defaults updated!"
+                lbl_status.color = "green"
+            else:
+                lbl_status.value = f"Error: {response.status_code}"
+                lbl_status.color = "red"
+        except Exception as err:
+            lbl_status.value = "Connection Failed"
+            lbl_status.color = "red"
+        page.update()
 
     # --- LAYOUT ---
     page.add(
@@ -179,6 +235,8 @@ def main(page: ft.Page):
             ft.Divider(),
             ft.ElevatedButton("Save Local", icon=ft.Icons.SAVE, on_click=save_local_click, width=400),
             ft.ElevatedButton("Sync to PC", icon=ft.Icons.WIFI, on_click=sync_to_pc_click, width=400),
+            # NEW BUTTON
+            ft.ElevatedButton("Get Defaults", icon=ft.Icons.DOWNLOAD, on_click=get_defaults_click, width=400),
             ft.Container(height=10),
             lbl_status
         ])
