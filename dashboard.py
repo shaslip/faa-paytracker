@@ -142,7 +142,7 @@ with tab_facts:
         
         with h_col1:
             st.caption("**Actual Calendar**")
-            st.dataframe(df_actual, hide_index=True, use_container_width=True)
+            st.dataframe(df_actual, hide_index=True, width='stretch')
             
         with h_col2:
             st.caption("**Mine (Observed)**")
@@ -153,7 +153,7 @@ with tab_facts:
             st.dataframe(
                 df_mine.style.apply(highlight_adj, axis=1), 
                 hide_index=True, 
-                use_container_width=True,
+                width='stretch',
                 column_config={"Adjusted": None} # Hide the boolean helper column
             )
     else:
