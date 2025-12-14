@@ -144,7 +144,7 @@ with tab_facts:
             st.dataframe(
                 df_actual, 
                 hide_index=True, 
-                use_container_width=True, 
+                width='stretch',
                 height=t_height
             )
             
@@ -157,7 +157,7 @@ with tab_facts:
             st.dataframe(
                 df_mine.style.apply(highlight_adj, axis=1), 
                 hide_index=True, 
-                use_container_width=True,
+                width='stretch',
                 column_config={"Adjusted": None}, # Hide the boolean helper column
                 height=t_height
             )
