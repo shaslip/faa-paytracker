@@ -134,44 +134,55 @@ with tab_audit:
     # ==========================
     st.header("Deep Dive Audit")
     
-    # 1. Fetch Stubs & Calculate Next Period
+    # 1. Fetch Stubs & Calculate Next Periods
     stubs = models.get_paystubs_meta()
     
-    # --- LOGIC: Predict Current/Next Period ---
-    next_pe = None
+    # --- LOGIC: Predict Future Periods (Projected #1 and #2) ---
+    # We need 2 future periods to cover the "Gap Week" where the current pay period 
+    # has ended but the official stub hasn't been released yet.
     if not stubs.empty:
         stubs = stubs.sort_values('period_ending', ascending=False)
         last_pe_str = stubs.iloc[0]['period_ending']
         last_dt = datetime.strptime(last_pe_str, "%Y-%m-%d")
-        next_dt = last_dt + timedelta(days=14)
-        next_pe = next_dt.strftime("%Y-%m-%d")
         
-        # Create a "Projected" row
-        future_row = pd.DataFrame([{
-            'id': -1, 
-            'pay_date': 'Pending', 
-            'period_ending': next_pe, 
-            'net_pay': 0.0, 
-            'gross_pay': 0.0, 
-            'file_source': 'Projected'
-        }])
-        stubs = pd.concat([future_row, stubs], ignore_index=True)
+        future_rows = []
+        for i in range(1, 3): # Generate +14 days (ID -1) and +28 days (ID -2)
+            fut_dt = last_dt + timedelta(days=14 * i)
+            fut_pe = fut_dt.strftime("%Y-%m-%d")
+            future_rows.append({
+                'id': -1 * i, 
+                'pay_date': 'Pending', 
+                'period_ending': fut_pe, 
+                'net_pay': 0.0, 
+                'gross_pay': 0.0, 
+                'file_source': 'Projected'
+            })
+            
+        future_df = pd.DataFrame(future_rows)
+        stubs = pd.concat([future_df, stubs], ignore_index=True)
 
     if not stubs.empty:
         # Pre-calculate statuses
         status_map = {}
         status_map[-1] = "📅" 
+        status_map[-2] = "🔮"
         
         for _, row in stubs.iterrows():
             sid = row['id']
-            if sid == -1: continue 
+            if sid < 0: continue  # Skip audit for projected
             d = models.get_full_paystub_data(sid)
             f = logic.run_full_audit(d)
             status_map[sid] = "🔴" if f else "✅"
 
         def fmt(rid): 
-            if rid == -1:
-                return f"{status_map.get(rid)} Current (Projected): {next_pe}"
+            # Look up the date for this specific ID in the dataframe
+            row_meta = stubs[stubs['id']==rid].iloc[0]
+            pe_str = row_meta['period_ending']
+            
+            if rid < 0:
+                label = "Current" if rid == -1 else "Next"
+                return f"{status_map.get(rid)} {label} (Projected): {pe_str}"
+            
             r = stubs[stubs['id']==rid].iloc[0]
             icon = status_map.get(rid, "")
             return f"{icon} {r['period_ending']} (Net: ${r['net_pay']:,.2f})"
@@ -184,16 +195,20 @@ with tab_audit:
             st.session_state['last_viewed_id'] = sel_id
         
         # 2. Setup Context (Projected vs Actual)
-        if sel_id == -1:
-            # PROJECTED MODE
-            pe = next_pe
+        # We now dynamically grab 'pe' from the dataframe so it works for -1 OR -2
+        selected_row = stubs[stubs['id'] == sel_id].iloc[0]
+        pe = selected_row['period_ending']
+
+        if sel_id < 0:
+            # PROJECTED MODE (Handles both -1 and -2)
             act_data = None
             act_flags = {}
-            st.info(f"You are editing the current pay period ({pe}). We are using your last known pay rates for estimates.")
+            st.info(f"You are editing a projected period ({pe}). We are using your last known pay rates for estimates.")
         else:
             # ACTUAL MODE
             act_data = models.get_full_paystub_data(sel_id)
             act_flags = logic.run_full_audit(act_data)
+            # Ensure pe is consistent (though it should be same as lookup)
             pe = act_data['stub']['period_ending']
 
         # 3. V2 Editor
