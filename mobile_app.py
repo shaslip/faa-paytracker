@@ -44,7 +44,7 @@ def main(page: ft.Page):
         label="Date", 
         value=datetime.now().strftime("%Y-%m-%d"), 
         read_only=True,
-        icon=ft.icons.CALENDAR_TODAY,
+        icon=ft.Icons.CALENDAR_TODAY,
         expand=True
     )
 
@@ -60,7 +60,7 @@ def main(page: ft.Page):
     page.overlay.append(date_picker)
 
     btn_pick_date = ft.IconButton(
-        icon=ft.icons.CALENDAR_MONTH,
+        icon=ft.Icons.CALENDAR_MONTH,
         on_click=lambda _: date_picker.pick_date()
     )
 
@@ -173,8 +173,8 @@ def main(page: ft.Page):
             dd_leave,
             ft.Row([txt_ojti, txt_cic], alignment="spaceBetween"),
             ft.Divider(),
-            ft.ElevatedButton("Save Local", icon=ft.icons.SAVE, on_click=save_local_click, width=400),
-            ft.ElevatedButton("Sync to PC", icon=ft.icons.WIFI, on_click=sync_to_pc_click, width=400),
+            ft.ElevatedButton("Save Local", icon=ft.Icons.SAVE, on_click=save_local_click, width=400),
+            ft.ElevatedButton("Sync to PC", icon=ft.Icons.WIFI, on_click=sync_to_pc_click, width=400),
             ft.Container(height=10),
             lbl_status
         ])
