@@ -1,0 +1,8 @@
+streamlit
+pandas
+beautifulsoup4
+requests
+flet
+fastapi
+uvicorn
+watchdog
