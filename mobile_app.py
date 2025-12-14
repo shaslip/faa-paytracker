@@ -216,32 +216,33 @@ def main(page: ft.Page):
         page.update()
 
     def get_updates_click(e):
-        lbl_status.value = "Downloading Schedule & Holidays..."
+        lbl_status.value = "Downloading Data..."
         page.update()
         try:
-            # 1. Get Schedule Defaults
+            # 1. Defaults (Keep existing logic)
             r_sched = requests.get(f"{DESKTOP_URL}/get_schedule_defaults", timeout=5)
             conn = sqlite3.connect(DB_NAME)
-            
             if r_sched.status_code == 200:
                 conn.execute("DELETE FROM schedule_defaults")
                 for i in r_sched.json():
                     conn.execute("INSERT INTO schedule_defaults VALUES (?,?,?,?)", 
                                  (i['year'], i['day'], i['start'], i['end']))
             
-            # 2. Get Holidays (Current + Next Year)
-            conn.execute("DELETE FROM holiday_cache")
-            years = [datetime.now().year, datetime.now().year + 1]
-            for y in years:
-                r_hol = requests.get(f"{DESKTOP_URL}/get_holidays?year={y}", timeout=5)
-                if r_hol.status_code == 200:
-                    for h in r_hol.json():
-                        conn.execute("INSERT INTO holiday_cache VALUES (?,?,?,?)", 
-                                     (h['year'], h['name'], h['date'], h['day']))
+            # 2. NEW: Get Actual Saved Shifts (The OT Overrides)
+            r_shifts = requests.get(f"{DESKTOP_URL}/get_saved_shifts?year={datetime.now().year}", timeout=5)
+            if r_shifts.status_code == 200:
+                conn.execute("DELETE FROM server_actuals")
+                for s in r_shifts.json():
+                    conn.execute("""
+                        INSERT INTO server_actuals (day_date, start_time, end_time, leave_type, ojti_hours, cic_hours)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (s['date'], s['start'], s['end'], s['leave'], s['ojti'], s['cic']))
+
+            # 3. Holidays (Keep existing logic)
+            # ... (your holiday code here) ...
             
             conn.commit()
             conn.close()
-            
             lbl_status.value = "Updates Downloaded!"
             lbl_status.color = "green"
             
@@ -250,7 +251,6 @@ def main(page: ft.Page):
             change_date(None)
             
         except Exception as err:
-            # FIX: Show the ACTUAL error message
             lbl_status.value = f"Error: {str(err)}"
             lbl_status.color = "red"
         page.update()
