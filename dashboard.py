@@ -36,14 +36,19 @@ tab_audit, tab_graphs, tab_facts, tab_ingest = st.tabs(["🧐 Audit & Time", "�
 # --- TAB: BASIC FACTS (Schedule Setup) ---
 with tab_facts:
     st.header("My Standard Schedule")
-    st.info("Enter times as HH:MM (e.g. 07:00 or 15:30). Leave empty for RDOs.")
     
-    conn = models.get_db()
-    sched_df = pd.read_sql("SELECT * FROM user_schedule ORDER BY day_of_week", conn)
-    conn.close()
+    # 1. Year Selector (Required for new database structure)
+    current_year = datetime.now().year
+    selected_year = st.selectbox("Select Year", [current_year - 1, current_year, current_year + 1], index=1)
+    
+    st.info(f"Editing Schedule for {selected_year}. Enter times as HH:MM (e.g. 07:00). Leave empty for RDOs.")
+    
+    # 2. Fetch Schedule for Selected Year
+    sched_df = models.get_user_schedule(selected_year)
     
     days_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
     sched_df['Day'] = sched_df['day_of_week'].map(days_map)
+    # Ensure correct column order for editor
     sched_df = sched_df[['Day', 'start_time', 'end_time', 'day_of_week']]
     
     # --- REGEX FIX: Allow Empty String (^$) OR Time Format ---
@@ -59,12 +64,13 @@ with tab_facts:
             "start_time": st.column_config.TextColumn("Std Start", validate=time_regex),
             "end_time": st.column_config.TextColumn("Std End", validate=time_regex)
         },
-        disabled=["Day"]
+        disabled=["Day"],
+        key=f"sched_editor_{selected_year}" # Unique key to prevent ID errors
     )
     
-    if st.button("💾 Save Standard Schedule"):
-        models.save_user_schedule(edited_sched)
-        st.success("Standard schedule updated!")
+    if st.button(f"💾 Save {selected_year} Schedule"):
+        models.save_user_schedule(edited_sched, selected_year)
+        st.success(f"Standard schedule for {selected_year} updated!")
         st.rerun()
 
 # --- TAB: AUDIT ---
@@ -83,10 +89,8 @@ with tab_audit:
             stubs_for_ledger.iloc[0]['id'] if not stubs_for_ledger.empty else 1
         )
         
-        # 3. Schedule for Fallbacks
-        conn = models.get_db()
-        std_sched = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
-        conn.close()
+        # 3. Schedule for Fallbacks (We pass None because logic.py now fetches the correct year per row)
+        std_sched = None
 
         if not stubs_for_ledger.empty:
             # 4. Run Logic
@@ -218,50 +222,45 @@ with tab_audit:
         with st.expander("📝 Edit Schedule (Actual Worked)", expanded=True):
             ts_v2 = models.load_timesheet_v2(pe)
 
-            # --- HELPER FUNCTIONS FOR TIME CONVERSION ---
+            # --- HELPER FUNCTIONS ---
             def float_to_hhmm(val):
-                """Converts 1.266 -> '1:16'"""
                 try:
                     val = float(val)
                     if val <= 0: return ""
                     h = int(val)
                     m = int(round((val - h) * 60))
                     return f"{h}:{m:02d}"
-                except (ValueError, TypeError):
-                    return ""
+                except (ValueError, TypeError): return ""
 
             def hhmm_to_float(val):
-                """Converts '1:16' -> 1.266"""
                 if not val or val == "": return 0.0
                 if isinstance(val, (int, float)): return float(val)
                 if ":" in str(val):
                     parts = str(val).split(":")
-                    # Handle 1:16
                     return float(parts[0]) + (float(parts[1]) / 60.0)
                 return 0.0
-            # ---------------------------------------------
+            # ------------------------
 
-            # 1. PREPARE DATA FOR DISPLAY (Convert Decimals to HH:MM strings)
-            # We create display columns so the user sees "1:16" instead of 1.266666
-            ts_v2['OJTI'] = ts_v2['OJTI'].apply(float_to_hhmm)
-            ts_v2['CIC'] = ts_v2['CIC'].apply(float_to_hhmm)
+            # 1. SETUP: Fetch Schedule & Holidays Correctly FIRST
+            pe_year = datetime.strptime(pe, "%Y-%m-%d").year
+            std_sched = models.get_user_schedule(pe_year).set_index('day_of_week')
+            
+            # Load Holidays using the new JSON loader
+            all_holidays = logic.load_holidays()
+            # Flatten to simple list of strings ['2024-01-01', '2025-01-01', ...]
+            flat_holidays = [h for sublist in all_holidays.values() for h in sublist]
 
-            # Logic: If we haven't calculated yet (res is None) BUT we have saved data in DB,
-            # auto-run the calculation so the user sees their saved state immediately.
+            # 2. RESTORED: Auto-Run Logic (Updated for Year-Aware Schedule)
             if st.session_state.get('res') is None and models.has_saved_timesheet(pe):
-                
-                # A. Convert strings back to floats for the logic engine (Temporary for this Auto-Run)
+                # A. Convert strings to floats for math
                 temp_df = ts_v2.copy()
                 temp_df['OJTI'] = temp_df['OJTI'].apply(hhmm_to_float)
                 temp_df['CIC'] = temp_df['CIC'].apply(hhmm_to_float)
 
                 # B. Fetch Dependencies
-                conn = models.get_db()
-                std_sched = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
-                conn.close()
                 ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
 
-                # C. Re-run Bucket Logic
+                # C. Run Bucket Logic (Using the std_sched we fetched at the TOP)
                 bucket_rows = []
                 for _, row in temp_df.iterrows():
                     s_obj = pd.to_datetime(row['Start'], format='%H:%M').time() if row['Start'] else None
@@ -274,58 +273,48 @@ with tab_audit:
                     bucket_rows.append(b)
                 buckets = pd.DataFrame(bucket_rows, columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"])
 
-                # D. Setup Metadata for Calculator
+                # D. Setup Metadata
                 if act_data:
                     stub_meta = act_data['stub']
                     stub_leave = act_data['leave']
                 else:
                     stub_meta = {
-                        'agency': 'Federal Aviation Administration',
-                        'period_ending': pe,
-                        'pay_date': 'Estimated',
+                        'agency': 'FAA', 'period_ending': pe, 'pay_date': 'Estimated',
                         'gross_pay': 0.0, 'net_pay': 0.0, 'total_deductions': 0.0,
                         'remarks': 'PROJECTED ESTIMATE'
                     }
                     stub_leave = pd.DataFrame()
 
-                # E. Run & Save to Session State
+                # E. Run & Save
                 exp_data = logic.calculate_expected_pay(buckets, ref_rate, stub_meta, ref_ded, stub_leave, ref_earn)
                 st.session_state['res'] = exp_data
                 st.rerun()
-            
-            # Use same regex here to allow clearing shifts
-            time_regex = r"^$|^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
-            
-            # --- FEATURE: Mark Observed Holidays Visually ---
-            conn = models.get_db()
-            std_sched = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
-            conn.close()
-            
-            # Create a display column
+
+            # 3. PREPARE DISPLAY DATA (Icons & Time Formatting)
+            ts_v2['OJTI'] = ts_v2['OJTI'].apply(float_to_hhmm)
+            ts_v2['CIC'] = ts_v2['CIC'].apply(float_to_hhmm)
             ts_v2['Display_Date'] = ts_v2['Date']
             
             for idx, row in ts_v2.iterrows():
                 d_obj = datetime.strptime(row['Date'], "%Y-%m-%d").date()
                 
-                # 1. Restore the Day of Week Format (e.g. "10-04 (Sat)")
                 day_str = d_obj.strftime("%m-%d (%a)")
                 ts_v2.at[idx, 'Display_Date'] = day_str
                 
-                # 2. Check Holiday Logic
-                obs_date = logic.get_observed_holiday(d_obj, std_sched)
-                
+                # Check Holiday Logic
                 is_obs = False
-                for h in logic.HOLIDAYS:
+                for h in flat_holidays:
                     h_d = datetime.strptime(h, "%Y-%m-%d").date()
                     if logic.get_observed_holiday(h_d, std_sched) == d_obj:
                         is_obs = True
                         break
                 
                 if is_obs:
-                    # Append the flag to the formatted string
                     ts_v2.at[idx, 'Display_Date'] = f"{day_str} (HOLIDAY) 🎉"
-            # ------------------------------------------------
 
+            # 4. RENDER EDITOR
+            time_regex = r"^$|^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
+            
             edited = st.data_editor(
                 ts_v2, 
                 num_rows="fixed", 
@@ -340,28 +329,23 @@ with tab_audit:
                         "Leave Type (if gap)", 
                         options=["Holiday", "Annual", "Sick", "Credit", "Comp", "LWOP"]
                     ),
-                    # CHANGED: TextColumn to allow HH:MM input
                     "OJTI": st.column_config.TextColumn("OJTI (HH:MM)", validate=time_regex),
                     "CIC": st.column_config.TextColumn("CIC (HH:MM)", validate=time_regex)
                 },
-                column_order=["Display_Date", "Start", "End", "Leave_Type", "OJTI", "CIC"]
+                column_order=["Display_Date", "Start", "End", "Leave_Type", "OJTI", "CIC"],
+                key=f"editor_{sel_id}" 
             )
             
             # Restore raw date for saving
             edited['Date'] = ts_v2['Date']
             
+            # 5. CALCULATION LOGIC (Manual Button)
             if st.button("💾 Calculate"):
-                # 2. CONVERT BACK TO FLOATS FOR STORAGE/MATH
-                # If we don't do this, logic.py will crash trying to do math on "1:30"
                 calc_df = edited.copy()
                 calc_df['OJTI'] = calc_df['OJTI'].apply(hhmm_to_float)
                 calc_df['CIC'] = calc_df['CIC'].apply(hhmm_to_float)
 
                 models.save_timesheet_v2(pe, calc_df)
-                
-                conn = models.get_db()
-                std_sched = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
-                conn.close()
                 
                 bucket_rows = []
                 for _, row in calc_df.iterrows():
@@ -383,26 +367,22 @@ with tab_audit:
                     stub_meta = act_data['stub']
                     stub_leave = act_data['leave']
                 else:
-                    # Robust dummy for projections
                     stub_meta = {
-                        'agency': 'Federal Aviation Administration',
-                        'period_ending': pe,
-                        'pay_date': 'Estimated',
-                        'gross_pay': 0.0,
-                        'net_pay': 0.0,
-                        'total_deductions': 0.0,
+                        'agency': 'FAA', 'period_ending': pe, 'pay_date': 'Estimated',
+                        'gross_pay': 0.0, 'net_pay': 0.0, 'total_deductions': 0.0,
                         'remarks': 'PROJECTED ESTIMATE'
                     }
                     stub_leave = pd.DataFrame()
 
                 exp_data = logic.calculate_expected_pay(buckets, ref_rate, stub_meta, ref_ded, stub_leave, ref_earn)
                 st.session_state['res'] = exp_data
-
-        # 4. Render
+                st.rerun()
+            
+        # 4. Render Results
         exp_data = st.session_state.get('res', None)
         
-        # If Projected and no calculation yet, run a default one
-        if not exp_data and sel_id == -1:
+        # If Projected (any negative ID) and no calculation yet, run a default one
+        if not exp_data and sel_id < 0:
              ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
              empty_buckets = pd.DataFrame(columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"])
              
