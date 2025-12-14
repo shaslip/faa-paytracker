@@ -179,19 +179,52 @@ with tab_audit:
         with st.expander("📝 Edit Schedule (Actual Worked)", expanded=True):
             ts_v2 = models.load_timesheet_v2(pe)
 
+            # --- HELPER FUNCTIONS FOR TIME CONVERSION ---
+            def float_to_hhmm(val):
+                """Converts 1.266 -> '1:16'"""
+                try:
+                    val = float(val)
+                    if val <= 0: return ""
+                    h = int(val)
+                    m = int(round((val - h) * 60))
+                    return f"{h}:{m:02d}"
+                except (ValueError, TypeError):
+                    return ""
+
+            def hhmm_to_float(val):
+                """Converts '1:16' -> 1.266"""
+                if not val or val == "": return 0.0
+                if isinstance(val, (int, float)): return float(val)
+                if ":" in str(val):
+                    parts = str(val).split(":")
+                    # Handle 1:16
+                    return float(parts[0]) + (float(parts[1]) / 60.0)
+                return 0.0
+            # ---------------------------------------------
+
+            # 1. PREPARE DATA FOR DISPLAY (Convert Decimals to HH:MM strings)
+            # We create display columns so the user sees "1:16" instead of 1.266666
+            ts_v2['OJTI'] = ts_v2['OJTI'].apply(float_to_hhmm)
+            ts_v2['CIC'] = ts_v2['CIC'].apply(float_to_hhmm)
+
             # Logic: If we haven't calculated yet (res is None) BUT we have saved data in DB,
             # auto-run the calculation so the user sees their saved state immediately.
             if st.session_state.get('res') is None and models.has_saved_timesheet(pe):
                 
-                # 1. Fetch Dependencies
+                # A. Convert strings back to floats for the logic engine (Temporary for this Auto-Run)
+                temp_df = ts_v2.copy()
+                temp_df['OJTI'] = temp_df['OJTI'].apply(hhmm_to_float)
+                temp_df['CIC'] = temp_df['CIC'].apply(hhmm_to_float)
+
+                # B. Fetch Dependencies
                 conn = models.get_db()
                 std_sched = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
                 conn.close()
                 ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
 
-                # 2. Re-run Bucket Logic
+                # C. Re-run Bucket Logic
                 bucket_rows = []
-                for _, row in ts_v2.iterrows():
+                for _, row in temp_df.iterrows():
                     s_obj = pd.to_datetime(row['Start'], format='%H:%M').time() if row['Start'] else None
                     e_obj = pd.to_datetime(row['End'], format='%H:%M').time() if row['End'] else None
                     
@@ -202,7 +235,7 @@ with tab_audit:
                     bucket_rows.append(b)
                 buckets = pd.DataFrame(bucket_rows, columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"])
 
-                # 3. Setup Metadata for Calculator
+                # D. Setup Metadata for Calculator
                 if act_data:
                     stub_meta = act_data['stub']
                     stub_leave = act_data['leave']
@@ -216,7 +249,7 @@ with tab_audit:
                     }
                     stub_leave = pd.DataFrame()
 
-                # 4. Run & Save to Session State
+                # E. Run & Save to Session State
                 exp_data = logic.calculate_expected_pay(buckets, ref_rate, stub_meta, ref_ded, stub_leave, ref_earn)
                 st.session_state['res'] = exp_data
                 st.rerun()
@@ -261,7 +294,6 @@ with tab_audit:
                 width="stretch",
                 column_config={
                     "Date": None, 
-                    # Renamed header to be clear
                     "Display_Date": st.column_config.TextColumn("Date", disabled=True),
                     "Start": st.column_config.TextColumn("Act Start", validate=time_regex),
                     "End": st.column_config.TextColumn("Act End", validate=time_regex),
@@ -269,8 +301,9 @@ with tab_audit:
                         "Leave Type (if gap)", 
                         options=["Holiday", "Annual", "Sick", "Credit", "Comp", "LWOP"]
                     ),
-                    "OJTI": st.column_config.NumberColumn("OJTI (Hrs)"),
-                    "CIC": st.column_config.NumberColumn("CIC (Hrs)")
+                    # CHANGED: TextColumn to allow HH:MM input
+                    "OJTI": st.column_config.TextColumn("OJTI (HH:MM)", validate=time_regex),
+                    "CIC": st.column_config.TextColumn("CIC (HH:MM)", validate=time_regex)
                 },
                 column_order=["Display_Date", "Start", "End", "Leave_Type", "OJTI", "CIC"]
             )
@@ -279,14 +312,20 @@ with tab_audit:
             edited['Date'] = ts_v2['Date']
             
             if st.button("💾 Calculate"):
-                models.save_timesheet_v2(pe, edited)
+                # 2. CONVERT BACK TO FLOATS FOR STORAGE/MATH
+                # If we don't do this, logic.py will crash trying to do math on "1:30"
+                calc_df = edited.copy()
+                calc_df['OJTI'] = calc_df['OJTI'].apply(hhmm_to_float)
+                calc_df['CIC'] = calc_df['CIC'].apply(hhmm_to_float)
+
+                models.save_timesheet_v2(pe, calc_df)
                 
                 conn = models.get_db()
                 std_sched = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
                 conn.close()
                 
                 bucket_rows = []
-                for _, row in edited.iterrows():
+                for _, row in calc_df.iterrows():
                     s_obj = pd.to_datetime(row['Start'], format='%H:%M').time() if row['Start'] else None
                     e_obj = pd.to_datetime(row['End'], format='%H:%M').time() if row['End'] else None
                     
