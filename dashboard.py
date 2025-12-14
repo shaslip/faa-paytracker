@@ -28,14 +28,6 @@ if not is_port_in_use(5000):
     time.sleep(1)
 # --------------------------------
 
-def get_observed_date(holiday_date):
-    """Calculates in-lieu-of dates: Sat -> Fri, Sun -> Mon."""
-    if holiday_date.weekday() == 5:  # Saturday
-        return holiday_date - timedelta(days=1)
-    elif holiday_date.weekday() == 6: # Sunday
-        return holiday_date + timedelta(days=1)
-    return holiday_date
-
 def load_holidays_from_file(year):
     """Loads dates from holidays.json and zips them with standard names."""
     holiday_names = [
@@ -121,8 +113,14 @@ with tab_facts:
         data_actual = []
         data_mine = []
 
+        # PREPARE SCHEDULE: logic.py needs 'day_of_week' as the index to work
+        calc_sched = sched_df.set_index('day_of_week')
+
         for name, actual_date in holidays_list:
-            observed_date = get_observed_date(actual_date)
+            # FIX: Use logic.py function instead of local function
+            # This applies the RDO "Slide Rule" (Sunday moves forward, everything else slides back)
+            observed_date = logic.get_observed_holiday(actual_date, calc_sched)
+            
             is_adjusted = actual_date != observed_date
             
             # Format dates for display
