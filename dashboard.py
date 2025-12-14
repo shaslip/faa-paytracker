@@ -36,21 +36,17 @@ tab_audit, tab_graphs, tab_facts, tab_ingest = st.tabs(["🧐 Audit & Time", "�
 # --- TAB: BASIC FACTS (Schedule Setup) ---
 with tab_facts:
     st.header("My Standard Schedule")
+    st.info("Enter times as HH:MM (e.g. 07:00 or 15:30). Leave empty for RDOs.")
     
-    # 1. Year Selector
-    current_year = datetime.now().year
-    selected_year = st.selectbox("Select Year", [current_year - 1, current_year, current_year + 1], index=1)
-    
-    st.info(f"Editing Schedule for {selected_year}. Enter times as HH:MM. Leave empty for RDOs.")
-    
-    # 2. Fetch Schedule for Selected Year
-    sched_df = models.get_user_schedule(selected_year)
+    conn = models.get_db()
+    sched_df = pd.read_sql("SELECT * FROM user_schedule ORDER BY day_of_week", conn)
+    conn.close()
     
     days_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
     sched_df['Day'] = sched_df['day_of_week'].map(days_map)
-    # Ensure correct column order for editor
     sched_df = sched_df[['Day', 'start_time', 'end_time', 'day_of_week']]
     
+    # --- REGEX FIX: Allow Empty String (^$) OR Time Format ---
     time_regex = r"^$|^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
 
     edited_sched = st.data_editor(
@@ -66,10 +62,9 @@ with tab_facts:
         disabled=["Day"]
     )
     
-    if st.button(f"💾 Save {selected_year} Schedule"):
-        # Pass the selected year to the save function
-        models.save_user_schedule(edited_sched, selected_year)
-        st.success(f"Schedule for {selected_year} updated!")
+    if st.button("💾 Save Standard Schedule"):
+        models.save_user_schedule(edited_sched)
+        st.success("Standard schedule updated!")
         st.rerun()
 
 # --- TAB: AUDIT ---
@@ -222,12 +217,6 @@ with tab_audit:
         # 3. V2 Editor
         with st.expander("📝 Edit Schedule (Actual Worked)", expanded=True):
             ts_v2 = models.load_timesheet_v2(pe)
-            pe_year = datetime.strptime(pe, "%Y-%m-%d").year
-            std_sched = models.get_user_schedule(pe_year).set_index('day_of_week')
-            
-            all_holidays = logic.load_holidays()
-            # Flatten dictionary values into a single list of strings
-            flat_holidays = [h for sublist in all_holidays.values() for h in sublist]
 
             # --- HELPER FUNCTIONS FOR TIME CONVERSION ---
             def float_to_hhmm(val):
@@ -247,82 +236,34 @@ with tab_audit:
                 if isinstance(val, (int, float)): return float(val)
                 if ":" in str(val):
                     parts = str(val).split(":")
+                    # Handle 1:16
                     return float(parts[0]) + (float(parts[1]) / 60.0)
                 return 0.0
             # ---------------------------------------------
 
-            # 1. SETUP: Fetch Schedule & Holidays Correctly FIRST
-            pe_year = datetime.strptime(pe, "%Y-%m-%d").year
-            std_sched = models.get_user_schedule(pe_year).set_index('day_of_week')
-            
-            # Load Holidays using the new JSON loader
-            all_holidays = logic.load_holidays()
-            # Flatten to simple list of strings ['2024-01-01', '2025-01-01', ...]
-            flat_holidays = [h for sublist in all_holidays.values() for h in sublist]
-
-            # 2. PREPARE DISPLAY DATA (Icons & Time Formatting)
+            # 1. PREPARE DATA FOR DISPLAY (Convert Decimals to HH:MM strings)
+            # We create display columns so the user sees "1:16" instead of 1.266666
             ts_v2['OJTI'] = ts_v2['OJTI'].apply(float_to_hhmm)
             ts_v2['CIC'] = ts_v2['CIC'].apply(float_to_hhmm)
-            ts_v2['Display_Date'] = ts_v2['Date']
-            
-            for idx, row in ts_v2.iterrows():
-                d_obj = datetime.strptime(row['Date'], "%Y-%m-%d").date()
-                
-                # Restore the Day of Week Format (e.g. "10-04 (Sat)")
-                day_str = d_obj.strftime("%m-%d (%a)")
-                ts_v2.at[idx, 'Display_Date'] = day_str
-                
-                # Check Holiday Logic using the flattened list we just loaded
-                is_obs = False
-                for h in flat_holidays:
-                    h_d = datetime.strptime(h, "%Y-%m-%d").date()
-                    if logic.get_observed_holiday(h_d, std_sched) == d_obj:
-                        is_obs = True
-                        break
-                
-                if is_obs:
-                    ts_v2.at[idx, 'Display_Date'] = f"{day_str} (HOLIDAY) 🎉"
 
-            # 3. RENDER EDITOR
-            time_regex = r"^$|^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
-            
-            edited = st.data_editor(
-                ts_v2, 
-                num_rows="fixed", 
-                hide_index=True,
-                width="stretch",
-                column_config={
-                    "Date": None, 
-                    "Display_Date": st.column_config.TextColumn("Date", disabled=True),
-                    "Start": st.column_config.TextColumn("Act Start", validate=time_regex),
-                    "End": st.column_config.TextColumn("Act End", validate=time_regex),
-                    "Leave_Type": st.column_config.SelectboxColumn(
-                        "Leave Type (if gap)", 
-                        options=["Holiday", "Annual", "Sick", "Credit", "Comp", "LWOP"]
-                    ),
-                    "OJTI": st.column_config.TextColumn("OJTI (HH:MM)", validate=time_regex),
-                    "CIC": st.column_config.TextColumn("CIC (HH:MM)", validate=time_regex)
-                },
-                column_order=["Display_Date", "Start", "End", "Leave_Type", "OJTI", "CIC"]
-            )
-            
-            # Restore raw date for saving
-            edited['Date'] = ts_v2['Date']
-            
-            # 4. CALCULATION LOGIC
-            if st.button("💾 Calculate"):
-                # Convert back to floats for math
-                calc_df = edited.copy()
-                calc_df['OJTI'] = calc_df['OJTI'].apply(hhmm_to_float)
-                calc_df['CIC'] = calc_df['CIC'].apply(hhmm_to_float)
+            # Logic: If we haven't calculated yet (res is None) BUT we have saved data in DB,
+            # auto-run the calculation so the user sees their saved state immediately.
+            if st.session_state.get('res') is None and models.has_saved_timesheet(pe):
+                
+                # A. Convert strings back to floats for the logic engine (Temporary for this Auto-Run)
+                temp_df = ts_v2.copy()
+                temp_df['OJTI'] = temp_df['OJTI'].apply(hhmm_to_float)
+                temp_df['CIC'] = temp_df['CIC'].apply(hhmm_to_float)
 
-                models.save_timesheet_v2(pe, calc_df)
-                
-                # Logic: If we haven't calculated yet (res is None) BUT we have saved data in DB,
-                # we don't need the auto-run block anymore because the user just clicked Calculate.
-                
+                # B. Fetch Dependencies
+                conn = models.get_db()
+                std_sched = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
+                conn.close()
+                ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
+
+                # C. Re-run Bucket Logic
                 bucket_rows = []
-                for _, row in calc_df.iterrows():
+                for _, row in temp_df.iterrows():
                     s_obj = pd.to_datetime(row['Start'], format='%H:%M').time() if row['Start'] else None
                     e_obj = pd.to_datetime(row['End'], format='%H:%M').time() if row['End'] else None
                     
@@ -331,12 +272,9 @@ with tab_audit:
                         row['OJTI'], row['CIC'], std_sched
                     )
                     bucket_rows.append(b)
-                
                 buckets = pd.DataFrame(bucket_rows, columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"])
-                
-                # Pay Engine Setup
-                ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
-                
+
+                # D. Setup Metadata for Calculator
                 if act_data:
                     stub_meta = act_data['stub']
                     stub_leave = act_data['leave']
@@ -350,13 +288,19 @@ with tab_audit:
                     }
                     stub_leave = pd.DataFrame()
 
+                # E. Run & Save to Session State
                 exp_data = logic.calculate_expected_pay(buckets, ref_rate, stub_meta, ref_ded, stub_leave, ref_earn)
                 st.session_state['res'] = exp_data
                 st.rerun()
             
             # Use same regex here to allow clearing shifts
             time_regex = r"^$|^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
-          
+            
+            # --- FEATURE: Mark Observed Holidays Visually ---
+            conn = models.get_db()
+            std_sched = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
+            conn.close()
+            
             # Create a display column
             ts_v2['Display_Date'] = ts_v2['Date']
             
@@ -371,7 +315,7 @@ with tab_audit:
                 obs_date = logic.get_observed_holiday(d_obj, std_sched)
                 
                 is_obs = False
-                for h in flat_holidays:
+                for h in logic.HOLIDAYS:
                     h_d = datetime.strptime(h, "%Y-%m-%d").date()
                     if logic.get_observed_holiday(h_d, std_sched) == d_obj:
                         is_obs = True
@@ -415,6 +359,10 @@ with tab_audit:
 
                 models.save_timesheet_v2(pe, calc_df)
                 
+                conn = models.get_db()
+                std_sched = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
+                conn.close()
+                
                 bucket_rows = []
                 for _, row in calc_df.iterrows():
                     s_obj = pd.to_datetime(row['Start'], format='%H:%M').time() if row['Start'] else None
@@ -454,7 +402,7 @@ with tab_audit:
         exp_data = st.session_state.get('res', None)
         
         # If Projected and no calculation yet, run a default one
-        if not exp_data and sel_id < 0:
+        if not exp_data and sel_id == -1:
              ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
              empty_buckets = pd.DataFrame(columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"])
              
