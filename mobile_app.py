@@ -2,11 +2,20 @@ import flet as ft
 import sqlite3
 import requests
 import json
+import os
 from datetime import datetime
 
 # --- CONFIGURATION ---
 DESKTOP_URL = "http://10.0.0.77:5000" 
-DB_NAME = "mobile_data.db"
+if "ANDROID_ARGUMENT" in os.environ:
+    # We are running on the phone
+    from pathlib import Path
+    # Flet/Python on Android usually has access to the internal storage via this path
+    files_dir = os.environ.get("EXTERNAL_FILES_DIR", ".")
+    DB_NAME = os.path.join(files_dir, "mobile_data.db")
+else:
+    # We are on the Desktop
+    DB_NAME = "mobile_data.db"
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
