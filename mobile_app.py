@@ -80,10 +80,19 @@ def main(page: ft.Page):
         e.control.data = len(e.control.value)
 
     def change_date(e):
-        new_date = date_picker.value
+        # FIX: Handle case where date_picker.value is None (e.g., app startup or programmatic call)
+        if date_picker.value:
+            new_date = date_picker.value
+        else:
+            # Fallback to the text field or today
+            try:
+                new_date = datetime.strptime(txt_date.value, "%Y-%m-%d")
+            except:
+                new_date = datetime.now()
+
         txt_date.value = new_date.strftime("%Y-%m-%d")
         
-        # Auto-Fill
+        # Auto-Fill Logic
         day_idx = new_date.weekday()
         target_year = new_date.year
         conn = sqlite3.connect(DB_NAME)
@@ -222,6 +231,7 @@ def main(page: ft.Page):
             
             conn.commit()
             conn.close()
+            
             lbl_status.value = "Updates Downloaded!"
             lbl_status.color = "green"
             
@@ -230,7 +240,8 @@ def main(page: ft.Page):
             change_date(None)
             
         except Exception as err:
-            lbl_status.value = "Connection Failed"
+            # FIX: Show the ACTUAL error message
+            lbl_status.value = f"Error: {str(err)}"
             lbl_status.color = "red"
         page.update()
 
