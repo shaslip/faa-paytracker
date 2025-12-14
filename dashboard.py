@@ -350,12 +350,7 @@ with tab_audit:
             
             # Use same regex here to allow clearing shifts
             time_regex = r"^$|^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
-            
-            # --- FEATURE: Mark Observed Holidays Visually ---
-            conn = models.get_db()
-            std_sched = pd.read_sql("SELECT * FROM user_schedule", conn).set_index('day_of_week')
-            conn.close()
-            
+          
             # Create a display column
             ts_v2['Display_Date'] = ts_v2['Date']
             
@@ -457,7 +452,7 @@ with tab_audit:
         exp_data = st.session_state.get('res', None)
         
         # If Projected and no calculation yet, run a default one
-        if not exp_data and sel_id == -1:
+        if not exp_data and sel_id < 0:
              ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
              empty_buckets = pd.DataFrame(columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"])
              
