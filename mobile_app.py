@@ -6,7 +6,6 @@ import os
 from datetime import datetime
 
 # --- CONFIGURATION ---
-# Default fallback if nothing is saved in settings
 DEFAULT_IP = "http://10.0.0.77:5000"
 
 if "ANDROID_ARGUMENT" in os.environ:
@@ -69,7 +68,6 @@ def main(page: ft.Page):
     init_db()
 
     # --- SETTINGS LOGIC ---
-    # Load IP from storage or use default
     stored_ip = page.client_storage.get("server_ip")
     current_ip = stored_ip if stored_ip else DEFAULT_IP
 
@@ -79,7 +77,6 @@ def main(page: ft.Page):
     def save_settings(e):
         nonlocal current_ip
         new_ip = txt_ip.value.strip()
-        # Simple validation to ensure they didn't forget http
         if not new_ip.startswith("http"):
             new_ip = "http://" + new_ip
         
@@ -101,7 +98,6 @@ def main(page: ft.Page):
     )
     page.overlay.append(settings_dialog)
 
-    # --- APP BAR (Settings Icon) ---
     page.appbar = ft.AppBar(
         title=ft.Text("FAA PayTracker"),
         center_title=False,
@@ -111,7 +107,6 @@ def main(page: ft.Page):
         ],
     )
 
-    # --- SHARED UI COMPONENTS ---
     lbl_status = ft.Text(value="Ready", color="grey")
 
     # ==========================================
@@ -250,7 +245,6 @@ def main(page: ft.Page):
             lbl_status.value = f"Saved {txt_date.value}"
             lbl_status.color = "green"
             
-            # Refresh Pending Tab
             load_pending_queue()
             
         except Exception as err:
@@ -268,7 +262,6 @@ def main(page: ft.Page):
             
             if rows:
                 payload = [dict(r) for r in rows]
-                # USE DYNAMIC URL
                 r = requests.post(f"{get_url()}/mobile_sync", json=payload, timeout=5)
                 if r.status_code == 200:
                     conn.execute("DELETE FROM offline_queue")
@@ -282,7 +275,6 @@ def main(page: ft.Page):
                 lbl_status.value = "Queue empty."
             conn.close()
             
-            # Refresh Pending Tab
             load_pending_queue()
             
         except Exception as err:
@@ -398,14 +390,16 @@ def main(page: ft.Page):
     )
 
     # ==========================================
-    # TAB 3: PENDING (New)
+    # TAB 3: PENDING (UPDATED)
     # ==========================================
+    # FIX: Added OJTI and CIC columns so user can see their overrides
     pending_table = ft.DataTable(
         columns=[
             ft.DataColumn(ft.Text("Date")),
             ft.DataColumn(ft.Text("Start")),
             ft.DataColumn(ft.Text("End")),
-            ft.DataColumn(ft.Text("Leave")),
+            ft.DataColumn(ft.Text("OJTI")), # Added
+            ft.DataColumn(ft.Text("CIC")),  # Added
         ],
         width=400,
         heading_row_color=ft.Colors.GREY_200,
@@ -413,17 +407,23 @@ def main(page: ft.Page):
 
     def load_pending_queue():
         conn = sqlite3.connect(DB_NAME)
-        rows = conn.execute("SELECT day_date, start_time, end_time, leave_type FROM offline_queue ORDER BY day_date DESC").fetchall()
+        # FIX: Query OJTI and CIC
+        rows = conn.execute("SELECT day_date, start_time, end_time, leave_type, ojti_hours, cic_hours FROM offline_queue ORDER BY day_date DESC").fetchall()
         conn.close()
 
         pending_table.rows.clear()
-        for d, s, e, l in rows:
+        for d, s, e, l, o, c in rows:
+            # Helper to display overrides cleanly
+            ojti_str = str(o) if o > 0 else "-"
+            cic_str = str(c) if c > 0 else "-"
+            
             pending_table.rows.append(
                 ft.DataRow(cells=[
                     ft.DataCell(ft.Text(d, weight="bold")),
                     ft.DataCell(ft.Text(s if s else "-")),
                     ft.DataCell(ft.Text(e if e else "-")),
-                    ft.DataCell(ft.Text(l if l else "-")),
+                    ft.DataCell(ft.Text(ojti_str)), 
+                    ft.DataCell(ft.Text(cic_str)),  
                 ])
             )
         page.update()
