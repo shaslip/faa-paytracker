@@ -508,10 +508,114 @@ with tab_audit:
         st.warning("No data found. Please run an ingestion scan first to seed the database.")
     
 with tab_graphs:
-    st.header("Financial Trends")
-    stubs = models.get_paystubs_meta()
-    if not stubs.empty:
-        st.line_chart(stubs.set_index('pay_date')[['gross_pay', 'net_pay']])
+    st.header("📊 Pay Statistics")
+    
+    # 1. Fetch Granular Data
+    df_earn, df_ded = models.get_all_line_items()
+    
+    if df_earn.empty:
+        st.info("No earnings data found to graph.")
+    else:
+        # --- PRE-PROCESSING ---
+        # Ensure dates are datetime objects for proper graphing
+        df_earn['pay_date'] = pd.to_datetime(df_earn['pay_date'])
+        df_ded['pay_date'] = pd.to_datetime(df_ded['pay_date'])
+
+        # Helper to convert "HH:MM" string hours to float for Rate Math
+        def parse_hours(val):
+            if isinstance(val, str) and ":" in val:
+                parts = val.split(":")
+                return float(parts[0]) + float(parts[1])/60.0
+            return float(val) if val else 0.0
+
+        df_earn['hours_float'] = df_earn['hours_current'].apply(parse_hours)
+
+        # ==========================================
+        # SECTION 1: EARNINGS & OVERTIME MATH
+        # ==========================================
+        st.subheader("Earnings Analysis")
+
+        # Pivot the data so we have columns for every earnings type (e.g., 'Regular', 'True Overtime')
+        # We aggregate by 'sum' in case there are split lines, though usually there's 1 per date.
+        pivot_amt = df_earn.pivot_table(index='pay_date', columns='type', values='amount_current', aggfunc='sum').fillna(0)
+        pivot_hrs = df_earn.pivot_table(index='pay_date', columns='type', values='hours_float', aggfunc='sum').fillna(0)
+        
+        # --- CUSTOM CALCULATION: Adjusted Overtime (OT + FLSA) ---
+        # Identify the exact column names used in your DB (based on logic.py)
+        col_ot = "True Overtime"
+        col_flsa = "FLSA Premium"
+        col_total_ot = "Overtime (with FLSA)" # New calculated column name
+        col_real_rate = "Real OT Rate ($/hr)" # New calculated rate column
+
+        # If the columns exist, create the combined metric
+        if col_ot in pivot_amt.columns:
+            # 1. Calculate Total OT Pay (OT + FLSA)
+            flsa_amt = pivot_amt[col_flsa] if col_flsa in pivot_amt.columns else 0.0
+            pivot_amt[col_total_ot] = pivot_amt[col_ot] + flsa_amt
+            
+            # 2. Calculate Real Rate: (OT + FLSA) / OT Hours
+            # We use a safe division to avoid divide-by-zero errors
+            ot_hours = pivot_hrs[col_ot]
+            # Replace 0 hours with NaN temporarily to prevent infinite rates in the graph
+            safe_hours = ot_hours.replace(0, pd.NA)
+            pivot_amt[col_real_rate] = pivot_amt[col_total_ot] / safe_hours
+
+        # --- CONTROLS ---
+        # Default selections: Gross Pay (from metadata if available, otherwise sum pivot)
+        available_cols = list(pivot_amt.columns)
+        
+        # Pre-select interesting columns if they exist
+        defaults = []
+        if "Regular" in available_cols: defaults.append("Regular")
+        if col_total_ot in available_cols: defaults.append(col_total_ot)
+        
+        # Multiselect for Earnings
+        cols_to_graph = st.multiselect(
+            "Select Earnings to Graph:", 
+            options=available_cols, 
+            default=defaults
+        )
+        
+        if cols_to_graph:
+            st.line_chart(pivot_amt[cols_to_graph])
+        
+        # --- Special Rate Graph ---
+        if col_real_rate in available_cols:
+            with st.expander("📈 View Real Overtime Rate (Effective Hourly)", expanded=False):
+                st.caption("This graph tracks your effective overtime rate: *(True OT Pay + FLSA Premium) / OT Hours*.")
+                # Drop NAs so we don't plot gaps where you didn't work OT
+                rate_series = pivot_amt[col_real_rate].dropna()
+                if not rate_series.empty:
+                    st.line_chart(rate_series)
+                    avg_rate = rate_series.mean()
+                    st.metric("Average Real OT Rate", f"${avg_rate:,.2f}/hr")
+                else:
+                    st.info("No Overtime hours found to calculate rate.")
+
+        st.divider()
+
+        # ==========================================
+        # SECTION 2: DEDUCTIONS
+        # ==========================================
+        st.subheader("Deductions Analysis")
+        
+        pivot_ded = df_ded.pivot_table(index='pay_date', columns='type', values='amount_current', aggfunc='sum').fillna(0)
+        
+        ded_cols = list(pivot_ded.columns)
+        
+        # Smart defaults for deductions
+        ded_defaults = []
+        for c in ["Federal Tax", "OASDI", "FERS", "TSP"]:
+            if c in ded_cols: ded_defaults.append(c)
+            
+        ded_to_graph = st.multiselect(
+            "Select Deductions to Graph:", 
+            options=ded_cols, 
+            default=ded_defaults
+        )
+        
+        if ded_to_graph:
+            st.line_chart(pivot_ded[ded_to_graph])
 
 with tab_ingest:
     if st.button("Scan PayStubs"):
