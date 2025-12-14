@@ -390,48 +390,55 @@ def main(page: ft.Page):
     )
 
     # ==========================================
-    # TAB 3: PENDING (UPDATED)
+    # TAB 3: PENDING (RAW DUMP)
     # ==========================================
-    # FIX: Added OJTI and CIC columns so user can see their overrides
     pending_table = ft.DataTable(
         columns=[
             ft.DataColumn(ft.Text("Date")),
             ft.DataColumn(ft.Text("Start")),
             ft.DataColumn(ft.Text("End")),
-            ft.DataColumn(ft.Text("OJTI")), # Added
-            ft.DataColumn(ft.Text("CIC")),  # Added
+            ft.DataColumn(ft.Text("Leave")),
+            ft.DataColumn(ft.Text("OJTI")), 
+            ft.DataColumn(ft.Text("CIC")),  
         ],
         width=400,
         heading_row_color=ft.Colors.GREY_200,
+        column_spacing=10
     )
 
     def load_pending_queue():
         conn = sqlite3.connect(DB_NAME)
-        # FIX: Query OJTI and CIC
+        # Fetch everything exactly as it is in the queue
         rows = conn.execute("SELECT day_date, start_time, end_time, leave_type, ojti_hours, cic_hours FROM offline_queue ORDER BY day_date DESC").fetchall()
         conn.close()
 
         pending_table.rows.clear()
+        
         for d, s, e, l, o, c in rows:
-            # Helper to display overrides cleanly
-            ojti_str = str(o) if o > 0 else "-"
-            cic_str = str(c) if c > 0 else "-"
-            
+            # Display "-" for blanks, but show ALL data regardless of defaults
+            s_disp = s if s else "-"
+            e_disp = e if e else "-"
+            l_disp = l if l and l != "None" else "-"
+            o_disp = str(o) if o and o > 0 else "-"
+            c_disp = str(c) if c and c > 0 else "-"
+
             pending_table.rows.append(
                 ft.DataRow(cells=[
-                    ft.DataCell(ft.Text(d, weight="bold")),
-                    ft.DataCell(ft.Text(s if s else "-")),
-                    ft.DataCell(ft.Text(e if e else "-")),
-                    ft.DataCell(ft.Text(ojti_str)), 
-                    ft.DataCell(ft.Text(cic_str)),  
+                    ft.DataCell(ft.Text(d, size=12, weight="bold")),
+                    ft.DataCell(ft.Text(s_disp, size=12)),
+                    ft.DataCell(ft.Text(e_disp, size=12)),
+                    ft.DataCell(ft.Text(l_disp, size=12)),
+                    ft.DataCell(ft.Text(o_disp, size=12)), 
+                    ft.DataCell(ft.Text(c_disp, size=12)),  
                 ])
             )
+        
         page.update()
 
     tab_pending_content = ft.Container(
         padding=10,
         content=ft.Column([
-            ft.Text("Pending Sync", size=20, weight="bold"),
+            ft.Text("Pending Sync Queue", size=20, weight="bold"),
             ft.Divider(),
             ft.Column([pending_table], scroll=ft.ScrollMode.ADAPTIVE, height=600)
         ])
