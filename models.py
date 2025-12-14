@@ -236,3 +236,28 @@ def has_saved_timesheet(period_ending):
     count = c.fetchone()[0]
     conn.close()
     return count > 0
+
+def get_all_line_items():
+    """Fetches all earnings and deductions history normalized by pay_date."""
+    conn = get_db()
+    
+    # Fetch Earnings
+    sql_earn = """
+        SELECT p.pay_date, e.type, e.amount_current, e.hours_current, e.rate 
+        FROM earnings e 
+        JOIN paystubs p ON e.paystub_id = p.id 
+        ORDER BY p.pay_date
+    """
+    df_earn = pd.read_sql(sql_earn, conn)
+    
+    # Fetch Deductions
+    sql_ded = """
+        SELECT p.pay_date, d.type, d.amount_current 
+        FROM deductions d 
+        JOIN paystubs p ON d.paystub_id = p.id 
+        ORDER BY p.pay_date
+    """
+    df_ded = pd.read_sql(sql_ded, conn)
+    
+    conn.close()
+    return df_earn, df_ded
