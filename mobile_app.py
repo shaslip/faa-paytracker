@@ -45,6 +45,16 @@ def init_db():
             day TEXT
         )
     ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS server_actuals (
+            day_date TEXT PRIMARY KEY,
+            start_time TEXT,
+            end_time TEXT,
+            leave_type TEXT,
+            ojti_hours REAL,
+            cic_hours REAL
+        )
+    ''')
     conn.commit()
     conn.close()
 
