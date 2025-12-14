@@ -5,6 +5,27 @@ import logic
 import views
 import os
 from datetime import datetime, timedelta
+import socket
+import subprocess
+import sys
+import time
+
+def is_port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) == 0
+
+# Check if Listener (Port 5000) is running. If not, launch it.
+if not is_port_in_use(5000):
+    # Determine the path to listener.py relative to this script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    listener_path = os.path.join(script_dir, "listener.py")
+    
+    # Spawn the process in the background
+    subprocess.Popen([sys.executable, listener_path])
+    
+    # Optional: Brief wait to let it spin up
+    time.sleep(1)
+# --------------------------------
 
 st.set_page_config(page_title="FAA PayTracker", layout="wide")
 st.markdown(views.get_css(), unsafe_allow_html=True)
