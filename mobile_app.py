@@ -37,7 +37,7 @@ def main(page: ft.Page):
 
     # --- UI COMPONENTS ---
     
-    lbl_status = ft.Text(value="Ready", color=ft.colors.GREY)
+    lbl_status = ft.Text(value="Ready", color="grey")
 
     # 1. Date
     txt_date = ft.TextField(
@@ -115,14 +115,14 @@ def main(page: ft.Page):
             conn.close()
 
             lbl_status.value = f"Saved {txt_date.value}"
-            lbl_status.color = ft.colors.GREEN
+            lbl_status.color="green"
             
         except ValueError as ve:
             lbl_status.value = str(ve)
-            lbl_status.color = ft.colors.RED
+            lbl_status.color="red"
         except Exception as err:
             lbl_status.value = f"Error: {str(err)}"
-            lbl_status.color = ft.colors.RED
+            lbl_status.color="red"
         
         page.update()
 
@@ -151,14 +151,14 @@ def main(page: ft.Page):
                 c.execute("DELETE FROM offline_queue")
                 conn.commit()
                 lbl_status.value = f"Synced {len(rows)} entries."
-                lbl_status.color = ft.colors.GREEN
+                lbl_status.color="green"
             else:
                 lbl_status.value = f"Server Error: {response.status_code}"
-                lbl_status.color = ft.colors.RED
+                lbl_status.color="red"
 
         except Exception as err:
             lbl_status.value = "Sync Failed. Check Wi-Fi / IP."
-            lbl_status.color = ft.colors.RED
+            lbl_status.color="red"
         finally:
             conn.close()
             page.update()
