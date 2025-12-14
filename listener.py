@@ -115,16 +115,15 @@ async def ingest_mobile_data(entries: List[ShiftEntry]):
 @app.get("/get_schedule_defaults")
 async def get_schedule_defaults():
     """
-    Returns the standard schedule (0=Monday, 6=Sunday) from the desktop DB.
+    Returns the standard schedule from the 'user_schedule' table.
     """
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     try:
-        # Assumes you have a table 'standard_schedule' with day_of_week (0-6), start_time, end_time
-        rows = c.execute("SELECT day_of_week, start_time, end_time FROM standard_schedule").fetchall()
+        # Query the exact table used by your Dashboard
+        rows = c.execute("SELECT day_of_week, start_time, end_time FROM user_schedule ORDER BY day_of_week").fetchall()
         
-        # Convert to dictionary keyed by day integer
         schedule = {}
         for row in rows:
             schedule[row['day_of_week']] = {
@@ -134,7 +133,7 @@ async def get_schedule_defaults():
         return schedule
     except Exception as e:
         print(f"Error serving defaults: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return {}
     finally:
         conn.close()
 
