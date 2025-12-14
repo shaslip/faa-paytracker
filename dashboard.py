@@ -75,6 +75,9 @@ with tab_facts:
     # 2. Fetch Schedule for Selected Year
     sched_df = models.get_user_schedule(selected_year)
     
+    # [FIX] Create a copy for calculation BEFORE filtering columns for the UI
+    calc_sched = sched_df.set_index('day_of_week')
+
     days_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
     sched_df['Day'] = sched_df['day_of_week'].map(days_map)
     # Ensure correct column order for editor
@@ -113,14 +116,9 @@ with tab_facts:
         data_actual = []
         data_mine = []
 
-        # PREPARE SCHEDULE: logic.py needs 'day_of_week' as the index to work
-        calc_sched = sched_df.set_index('day_of_week')
-
         for name, actual_date in holidays_list:
-            # FIX: Use logic.py function instead of local function
-            # This applies the RDO "Slide Rule" (Sunday moves forward, everything else slides back)
+            # [FIX] Use logic.py sliding rule with the calc_sched we saved earlier
             observed_date = logic.get_observed_holiday(actual_date, calc_sched)
-            
             is_adjusted = actual_date != observed_date
             
             # Format dates for display
