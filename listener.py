@@ -85,33 +85,29 @@ async def ingest_mobile_data(entries: List[ShiftEntry]):
         conn.close()
 
 @app.get("/get_schedule_defaults")
-async def get_schedule_defaults(year: Optional[int] = None):
+async def get_schedule_defaults():
     """
-    Returns the standard schedule. Defaults to current year if not specified.
+    Returns ALL schedule rows (all years) so the mobile app can cache them.
     """
-    # FIX: Default to current year if mobile app doesn't send one
-    target_year = year if year else datetime.now().year
-    
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     try:
-        # FIX: Filter by YEAR to prevent duplicate rows from different years
-        rows = c.execute(
-            "SELECT day_of_week, start_time, end_time FROM user_schedule WHERE year = ? ORDER BY day_of_week", 
-            (target_year,)
-        ).fetchall()
+        # Fetch everything: Year, Day, Start, End
+        rows = c.execute("SELECT year, day_of_week, start_time, end_time FROM user_schedule").fetchall()
         
-        schedule = {}
-        for row in rows:
-            schedule[row['day_of_week']] = {
-                "start": row['start_time'], 
-                "end": row['end_time']
-            }
-        return schedule
+        data = []
+        for r in rows:
+            data.append({
+                "year": r['year'],
+                "day": r['day_of_week'],
+                "start": r['start_time'],
+                "end": r['end_time']
+            })
+        return data
     except Exception as e:
         print(f"Error serving defaults: {e}")
-        return {}
+        return []
     finally:
         conn.close()
 
