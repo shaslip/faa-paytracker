@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import sqlite3
 import pandas as pd
+import logic
 from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
@@ -110,6 +111,58 @@ async def get_schedule_defaults():
         return []
     finally:
         conn.close()
+
+@app.get("/get_holidays")
+async def get_holidays(year: Optional[int] = None):
+    """
+    Calculates and returns the OBSERVED holidays for the requested year.
+    Uses the server-side logic.py to ensure the 'Slide Rule' is accurate.
+    """
+    target_year = year if year else datetime.now().year
+    
+    # 1. Load the schedule for that year (needed for the slide rule)
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    # Fetch schedule and format for logic.py (index by day_of_week)
+    sched_df = pd.read_sql("SELECT * FROM user_schedule WHERE year = ?", conn, params=(target_year,))
+    conn.close()
+    
+    if sched_df.empty:
+        # Fallback if no schedule exists for that year
+        sched_df = pd.DataFrame([
+            {'day_of_week': i, 'is_workday': 1 if i < 5 else 0} for i in range(7)
+        ])
+    
+    # Set index for logic.get_observed_holiday
+    calc_sched = sched_df.set_index('day_of_week')
+
+    # 2. Load Raw Holidays
+    all_holidays = logic.load_holidays()
+    raw_dates = all_holidays.get(str(target_year), [])
+    
+    # Hardcoded names to match your dashboard (ensure length matches json)
+    holiday_names = [
+        "New Year's Day", "MLK Day", "Washington's Bday", "Memorial Day", 
+        "Juneteenth", "Independence Day", "Labor Day", "Columbus Day", 
+        "Veterans Day", "Thanksgiving", "Christmas"
+    ]
+
+    results = []
+    # Zip safely (in case json length differs)
+    for name, date_str in zip(holiday_names, raw_dates):
+        actual_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        
+        # 3. Apply the Slide Rule
+        observed_date = logic.get_observed_holiday(actual_date, calc_sched)
+        
+        results.append({
+            "year": target_year,
+            "name": name,
+            "date": observed_date.strftime("%Y-%m-%d"),
+            "day": observed_date.strftime("%A")
+        })
+        
+    return results
 
 if __name__ == "__main__":
     print(f"🚀 Listener active at http://{HOST}:{PORT}")
