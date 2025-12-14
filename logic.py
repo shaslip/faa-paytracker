@@ -18,6 +18,11 @@ def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched)
     for _, stub in sorted_stubs.iterrows():
         pe = stub['period_ending']
         
+        # --- FIX 1: Fetch the HISTORICAL rate/deductions for THIS specific paystub ---
+        # We ignore the ref_rate passed to the function, as that is likely 
+        # just the most recent one from the dashboard.
+        cur_rate, cur_ded, cur_earn = models.get_reference_data(stub['id'])
+        
         # Check if the user has explicitly SAVED a timesheet for this period
         is_audited = models.has_saved_timesheet(pe) 
 
@@ -32,12 +37,15 @@ def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched)
             # You entered data -> We trust YOU.
             ts_v2 = models.load_timesheet_v2(pe)
             
-            # --- FIX STARTS HERE: Explicitly build the buckets ---
             bucket_rows = []
             for _, row in ts_v2.iterrows():
                 # Convert string times to datetime objects if they exist
-                s_obj = pd.to_datetime(row['Start'], format='%H:%M').time() if row['Start'] else None
-                e_obj = pd.to_datetime(row['End'], format='%H:%M').time() if row['End'] else None
+                # Included a guard for "None" string just in case
+                s_raw = row['Start']
+                e_raw = row['End']
+                
+                s_obj = pd.to_datetime(s_raw, format='%H:%M').time() if s_raw and s_raw != "None" else None
+                e_obj = pd.to_datetime(e_raw, format='%H:%M').time() if e_raw and e_raw != "None" else None
                 
                 b = calculate_daily_breakdown(
                     row['Date'], s_obj, e_obj, row['Leave_Type'], 
@@ -45,13 +53,16 @@ def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched)
                 )
                 bucket_rows.append(b)
             
-            # Create the DataFrame that was missing previously
-            buckets = pd.DataFrame(bucket_rows)
-            # --- FIX ENDS HERE ---
+            # --- FIX 2: Explicitly define columns ---
+            # This ensures that even if 'Hol_Leave' is 0 for all rows and missing from 
+            # the dict keys in some edge cases, the DataFrame structure remains valid.
+            cols = ["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"]
+            buckets = pd.DataFrame(bucket_rows, columns=cols)
+            buckets = buckets.fillna(0.0)
 
-            # Calculate Expected Gross
+            # Calculate Expected Gross using the HISTORICAL rate (cur_rate)
             # We pass empty dfs for deducs/leave because we only care about Gross for the ledger
-            exp_data = calculate_expected_pay(buckets, ref_rate, stub, pd.DataFrame(), pd.DataFrame(), ref_earn)
+            exp_data = calculate_expected_pay(buckets, cur_rate, stub, pd.DataFrame(), pd.DataFrame(), cur_earn)
             expected_gross = exp_data['stub']['gross_pay']
             
             # Calculate Difference
