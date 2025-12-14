@@ -1,15 +1,21 @@
 import pandas as pd
 import models
+import json
+import os
 from datetime import datetime, timedelta
 
-HOLIDAYS = [
-    "2024-12-25", "2025-01-01", "2025-01-20", "2025-02-17", "2025-05-26", 
-    "2025-06-19", "2025-07-04", "2025-09-01", "2025-10-13", "2025-11-11", 
-    "2025-11-27", "2025-12-25"
-]
+def load_holidays():
+    """Loads holidays from holidays.json located in the same directory."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    json_path = os.path.join(script_dir, "holidays.json")
+    
+    if os.path.exists(json_path):
+        with open(json_path, 'r') as f:
+            return json.load(f)
+    return {}
 
 # --- 1. Create a ledger to track missed government payments ---
-def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched):
+def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched_ignored):
     ledger = []
     running_balance = 0.0
     
@@ -18,17 +24,19 @@ def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched)
     for _, stub in sorted_stubs.iterrows():
         pe = stub['period_ending']
         
-        # --- FIX 1: Fetch the HISTORICAL rate/deductions for THIS specific paystub ---
-        # We ignore the ref_rate passed to the function, as that is likely 
-        # just the most recent one from the dashboard.
+        # 1. Fetch Historical Context (Rate & Schedule) for THIS specific year
         cur_rate, cur_ded, cur_earn = models.get_reference_data(stub['id'])
         
+        pe_date = datetime.strptime(pe, "%Y-%m-%d")
+        # Fetch the schedule specific to this paystub's year
+        # We ignore the 'std_sched_ignored' argument passed from dashboard
+        hist_sched = models.get_user_schedule(pe_date.year).set_index('day_of_week')
+
         # Check if the user has explicitly SAVED a timesheet for this period
         is_audited = models.has_saved_timesheet(pe) 
 
         if not is_audited:
             # OPTION 1: The "Ignorance is Bliss" Approach
-            # If you didn't input data, we assume the Gov is correct.
             expected_gross = stub['gross_pay']
             diff = 0.0
             status = "⚪ Unaudited"
@@ -40,28 +48,25 @@ def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched)
             bucket_rows = []
             for _, row in ts_v2.iterrows():
                 # Convert string times to datetime objects if they exist
-                # Included a guard for "None" string just in case
                 s_raw = row['Start']
                 e_raw = row['End']
                 
                 s_obj = pd.to_datetime(s_raw, format='%H:%M').time() if s_raw and s_raw != "None" else None
                 e_obj = pd.to_datetime(e_raw, format='%H:%M').time() if e_raw and e_raw != "None" else None
                 
+                # Pass the HISTORICAL schedule to the breakdown
                 b = calculate_daily_breakdown(
                     row['Date'], s_obj, e_obj, row['Leave_Type'], 
-                    row['OJTI'], row['CIC'], std_sched
+                    row['OJTI'], row['CIC'], hist_sched
                 )
                 bucket_rows.append(b)
             
-            # --- FIX 2: Explicitly define columns ---
-            # This ensures that even if 'Hol_Leave' is 0 for all rows and missing from 
-            # the dict keys in some edge cases, the DataFrame structure remains valid.
+            # Create DataFrame with explicit columns to prevent empty-list crashes
             cols = ["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"]
             buckets = pd.DataFrame(bucket_rows, columns=cols)
             buckets = buckets.fillna(0.0)
 
-            # Calculate Expected Gross using the HISTORICAL rate (cur_rate)
-            # We pass empty dfs for deducs/leave because we only care about Gross for the ledger
+            # Calculate Expected Gross using the HISTORICAL rate
             exp_data = calculate_expected_pay(buckets, cur_rate, stub, pd.DataFrame(), pd.DataFrame(), cur_earn)
             expected_gross = exp_data['stub']['gross_pay']
             
@@ -69,7 +74,6 @@ def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched)
             diff = stub['gross_pay'] - expected_gross
             status = "✅ Balanced"
             
-            # Floating point tolerance
             if diff < -1.0: status = "🔴 Gov Owes You"
             elif diff > 1.0: status = "🟢 Backpay/Surplus"
 
@@ -128,8 +132,13 @@ def get_observed_holiday(date_obj, schedule_df):
     wd = date_obj.weekday()
     
     # 1. If holiday falls on a Workday, that is the holiday.
-    if schedule_df.loc[wd, 'is_workday']:
-        return date_obj
+    # Safety: Use .get() or try/except to handle missing schedule rows
+    try:
+        if schedule_df.loc[wd, 'is_workday']:
+            return date_obj
+    except (KeyError, IndexError):
+        # Fallback if schedule is incomplete: assume standard M-F
+        if wd < 5: return date_obj
 
     # 2. If holiday falls on RDO:
     # Rule: If Sunday (6), slide forward to next workday. 
@@ -137,12 +146,20 @@ def get_observed_holiday(date_obj, schedule_df):
     offset = 1
     direction = 1 if wd == 6 else -1
     
-    while True:
+    # Safety breakout to prevent infinite loops if schedule is empty
+    attempts = 0
+    while attempts < 14:
         check_date = date_obj + timedelta(days=(offset * direction))
-        # If we slid into a workday, that's the observed holiday
-        if schedule_df.loc[check_date.weekday(), 'is_workday']:
-            return check_date
+        try:
+            if schedule_df.loc[check_date.weekday(), 'is_workday']:
+                return check_date
+        except (KeyError, IndexError):
+            pass # Keep looking
+            
         offset += 1
+        attempts += 1
+    
+    return date_obj # Fallback
 
 def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, cic, std_sched_df):
     # --- SETUP ---
@@ -150,9 +167,13 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
     current_date = dt_obj.date()
     wd = dt_obj.weekday()
     
-    # 1. Determine "Observed Holiday"
+    # 1. Determine "Observed Holiday" using JSON loader
+    all_holidays = load_holidays()
+    year_str = str(dt_obj.year)
+    year_holidays = all_holidays.get(year_str, [])
+    
     is_observed_holiday = False
-    for h_str in HOLIDAYS:
+    for h_str in year_holidays:
         h_date = datetime.strptime(h_str, "%Y-%m-%d").date()
         obs_date = get_observed_holiday(h_date, std_sched_df)
         if obs_date == current_date:
@@ -160,15 +181,19 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
             break
 
     # 2. Get Standard Expectation (Check if RDO or Workday)
-    std_row = std_sched_df.loc[wd]
-    is_workday = std_row['is_workday']
+    # Handle cases where std_sched_df might be missing this day (Year mismatch fallback)
+    is_workday = False
     std_hours = 0.0
     
-    if is_workday and std_row['start_time'] and std_row['end_time']:
-        s_std = datetime.strptime(std_row['start_time'], "%H:%M")
-        e_std = datetime.strptime(std_row['end_time'], "%H:%M")
-        if e_std <= s_std: e_std += timedelta(days=1)
-        std_hours = (e_std - s_std).total_seconds() / 3600.0
+    if wd in std_sched_df.index:
+        std_row = std_sched_df.loc[wd]
+        is_workday = std_row['is_workday']
+        
+        if is_workday and std_row['start_time'] and std_row['end_time']:
+            s_std = datetime.strptime(std_row['start_time'], "%H:%M")
+            e_std = datetime.strptime(std_row['end_time'], "%H:%M")
+            if e_std <= s_std: e_std += timedelta(days=1)
+            std_hours = (e_std - s_std).total_seconds() / 3600.0
 
     # 3. Calculate Actual Worked Data
     worked_hours = 0.0
@@ -209,13 +234,11 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
             
             # --- SUNDAY PREMIUM DECISION LOGIC ---
             if is_workday:
-                # REGULAR SHIFT -> Apply Touch Rule (Federal Regular Pay Rule)
-                # If any part of the shift touches Sunday, pay premium for the whole shift
+                # REGULAR SHIFT -> Apply Touch Rule
                 if s_act.weekday() == 6 or e_act.weekday() == 6:
                     final_sunday_premium = min(8.0, worked_hours)
             else:
                 # OVERTIME SHIFT (RDO) -> Apply Calendar Rule
-                # Only pay for hours actually worked on Sunday
                 final_sunday_premium = calendar_sunday_hours
 
     # 4. The Gap Analysis
@@ -349,18 +372,15 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
             r_ytd = match.iloc[0]['amount_ytd']
             r_curr = match.iloc[0]['amount_current']
             
-            # FIX: If YTD is 0.0 (Partial/Shutdown check), do not do math. Return None.
-            if r_ytd <= 0.01:
-                return None
+            if r_ytd <= 0.01: return None
                 
             return round(r_ytd - r_curr + new_current, 2)
             
-        return None # If new item type, YTD is undefined/blank in this context
+        return None 
 
     rows = []
     items = []
     
-    # 1. Labels updated to match Standard FAA Paystubs
     if total_reg_hours > 0: 
         items.append(("Regular", base_rate, total_reg_hours, amt_reg_total))
     
@@ -383,10 +403,9 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     e_df = pd.DataFrame(rows, columns=['type', 'rate', 'hours_current', 'amount_current', 'amount_ytd'])
     e_df['hours_adjusted'] = 0.0; e_df['amount_adjusted'] = 0.0
 
-    # --- FIX: Convert Decimal Hours to HH:MM String for Display ---
+    # --- Helper: Convert Decimal Hours to HH:MM String for Display ---
     def fmt_hours(val):
         if not val or val < 0.001: return ""
-        # Handle the 59.999 -> 60 minute rollover correctly
         total_minutes = int(round(val * 60))
         h = total_minutes // 60
         m = total_minutes % 60
@@ -401,7 +420,6 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     if not actual_leave.empty:
         for _, row in actual_leave.iterrows():
             if any(x in row['type'] for x in target_leaves):
-                # Ensure we handle potential missing values cleanly
                 bal_start = row.get('balance_start', 0.0)
                 earned = row.get('earned_current', 0.0)
                 end = bal_start + earned
