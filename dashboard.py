@@ -36,17 +36,21 @@ tab_audit, tab_graphs, tab_facts, tab_ingest = st.tabs(["🧐 Audit & Time", "�
 # --- TAB: BASIC FACTS (Schedule Setup) ---
 with tab_facts:
     st.header("My Standard Schedule")
-    st.info("Enter times as HH:MM (e.g. 07:00 or 15:30). Leave empty for RDOs.")
     
-    conn = models.get_db()
-    sched_df = pd.read_sql("SELECT * FROM user_schedule ORDER BY day_of_week", conn)
-    conn.close()
+    # 1. Year Selector
+    current_year = datetime.now().year
+    selected_year = st.selectbox("Select Year", [current_year - 1, current_year, current_year + 1], index=1)
+    
+    st.info(f"Editing Schedule for {selected_year}. Enter times as HH:MM. Leave empty for RDOs.")
+    
+    # 2. Fetch Schedule for Selected Year
+    sched_df = models.get_user_schedule(selected_year)
     
     days_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
     sched_df['Day'] = sched_df['day_of_week'].map(days_map)
+    # Ensure correct column order for editor
     sched_df = sched_df[['Day', 'start_time', 'end_time', 'day_of_week']]
     
-    # --- REGEX FIX: Allow Empty String (^$) OR Time Format ---
     time_regex = r"^$|^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
 
     edited_sched = st.data_editor(
@@ -62,9 +66,10 @@ with tab_facts:
         disabled=["Day"]
     )
     
-    if st.button("💾 Save Standard Schedule"):
-        models.save_user_schedule(edited_sched)
-        st.success("Standard schedule updated!")
+    if st.button(f"💾 Save {selected_year} Schedule"):
+        # Pass the selected year to the save function
+        models.save_user_schedule(edited_sched, selected_year)
+        st.success(f"Schedule for {selected_year} updated!")
         st.rerun()
 
 # --- TAB: AUDIT ---
