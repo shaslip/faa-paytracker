@@ -4,7 +4,8 @@ import models
 import logic
 import views
 import os
-from datetime import datetime, timedelta
+import json
+from datetime import datetime, timedelta, date
 import socket
 import subprocess
 import sys
@@ -27,17 +28,53 @@ if not is_port_in_use(5000):
     time.sleep(1)
 # --------------------------------
 
+def get_observed_date(holiday_date):
+    """Calculates in-lieu-of dates: Sat -> Fri, Sun -> Mon."""
+    if holiday_date.weekday() == 5:  # Saturday
+        return holiday_date - timedelta(days=1)
+    elif holiday_date.weekday() == 6: # Sunday
+        return holiday_date + timedelta(days=1)
+    return holiday_date
+
+def load_holidays_from_file(year):
+    """Loads dates from holidays.json and zips them with standard names."""
+    holiday_names = [
+        "New Year's Day", "MLK Day", "Washington's Bday", "Memorial Day", 
+        "Juneteenth", "Independence Day", "Labor Day", "Columbus Day", 
+        "Veterans Day", "Thanksgiving", "Christmas"
+    ]
+    
+    try:
+        with open("holidays.json", "r") as f:
+            data = json.load(f)
+            
+        # Get dates for the specific year requested
+        raw_dates = data.get(str(year), [])
+        
+        # Zip names with parsed date objects
+        holidays_list = []
+        for name, date_str in zip(holiday_names, raw_dates):
+            # Parse YYYY-MM-DD string to date object
+            d = datetime.strptime(date_str, "%Y-%m-%d").date()
+            holidays_list.append((name, d))
+            
+        return holidays_list
+        
+    except Exception as e:
+        print(f"Error loading holidays.json: {e}")
+        return []
+
 st.set_page_config(page_title="FAA PayTracker", layout="wide")
 st.markdown(views.get_css(), unsafe_allow_html=True)
 models.setup_database()
 
 tab_audit, tab_graphs, tab_facts, tab_ingest = st.tabs(["🧐 Audit & Time", "📊 Graphs", "ℹ️ Basic Facts", "📥 Ingestion"])
 
-# --- TAB: BASIC FACTS (Schedule Setup) ---
+# --- TAB: BASIC FACTS (Schedule & Holidays) ---
 with tab_facts:
     st.header("My Standard Schedule")
     
-    # 1. Year Selector (Required for new database structure)
+    # 1. Year Selector
     current_year = datetime.now().year
     selected_year = st.selectbox("Select Year", [current_year - 1, current_year, current_year + 1], index=1)
     
@@ -57,7 +94,7 @@ with tab_facts:
     edited_sched = st.data_editor(
         sched_df,
         hide_index=True,
-        width="stretch",
+        width=None, # let streamlit decide width
         column_config={
             "day_of_week": None, 
             "Day": st.column_config.TextColumn(disabled=True),
@@ -65,13 +102,62 @@ with tab_facts:
             "end_time": st.column_config.TextColumn("Std End", validate=time_regex)
         },
         disabled=["Day"],
-        key=f"sched_editor_{selected_year}" # Unique key to prevent ID errors
+        key=f"sched_editor_{selected_year}"
     )
     
     if st.button(f"💾 Save {selected_year} Schedule"):
         models.save_user_schedule(edited_sched, selected_year)
         st.success(f"Standard schedule for {selected_year} updated!")
         st.rerun()
+
+    st.divider()
+    
+    # --- HOLIDAY TABLES ---
+    st.subheader(f"{selected_year} Holiday Schedule")
+    
+    holidays_list = load_holidays_from_file(selected_year)
+    
+    if holidays_list:
+        data_actual = []
+        data_mine = []
+
+        for name, actual_date in holidays_list:
+            observed_date = get_observed_date(actual_date)
+            is_adjusted = actual_date != observed_date
+            
+            # Format dates for display
+            act_str = actual_date.strftime("%Y-%m-%d")
+            act_day = actual_date.strftime("%A")
+            obs_str = observed_date.strftime("%Y-%m-%d")
+            obs_day = observed_date.strftime("%A")
+
+            data_actual.append({"Holiday": name, "Date": act_str, "Day": act_day})
+            data_mine.append({"Holiday": name, "Observed": obs_str, "Day": obs_day, "Adjusted": is_adjusted})
+
+        df_actual = pd.DataFrame(data_actual)
+        df_mine = pd.DataFrame(data_mine)
+
+        # Columns for side-by-side layout
+        h_col1, h_col2 = st.columns(2)
+        
+        with h_col1:
+            st.caption("**Actual Calendar**")
+            st.dataframe(df_actual, hide_index=True, use_container_width=True)
+            
+        with h_col2:
+            st.caption("**Mine (Observed)**")
+            # Apply highlighting to 'Mine' table where date is adjusted
+            def highlight_adj(row):
+                return ['background-color: #ffcc00; color: black' if row['Adjusted'] else '' for _ in row]
+            
+            st.dataframe(
+                df_mine.style.apply(highlight_adj, axis=1), 
+                hide_index=True, 
+                use_container_width=True,
+                column_config={"Adjusted": None} # Hide the boolean helper column
+            )
+    else:
+        st.error(f"No holiday data found for {selected_year} in holidays.json")
 
 # --- TAB: AUDIT ---
 with tab_audit:
