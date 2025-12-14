@@ -10,7 +10,6 @@ DESKTOP_URL = "http://10.0.0.77:5000"
 if "ANDROID_ARGUMENT" in os.environ:
     # We are running on the phone
     from pathlib import Path
-    # Flet/Python on Android usually has access to the internal storage via this path
     files_dir = os.environ.get("EXTERNAL_FILES_DIR", ".")
     DB_NAME = os.path.join(files_dir, "mobile_data.db")
 else:
@@ -32,12 +31,14 @@ def init_db():
             timestamp TEXT
         )
     ''')
-    # NEW: Table for storing the downloaded schedule
+    # UPDATED: Table now includes 'year'
     c.execute('''
         CREATE TABLE IF NOT EXISTS schedule_defaults (
-            day_idx INTEGER PRIMARY KEY,
+            year INTEGER,
+            day_idx INTEGER,
             start_time TEXT,
-            end_time TEXT
+            end_time TEXT,
+            PRIMARY KEY (year, day_idx)
         )
     ''')
     conn.commit()
@@ -83,11 +84,17 @@ def main(page: ft.Page):
         new_date = date_picker.value
         txt_date.value = new_date.strftime("%Y-%m-%d")
         
-        # 2. NEW: Auto-Fill Logic
+        # 2. UPDATED: Auto-Fill Logic (Year Aware)
         day_idx = new_date.weekday() # 0=Mon
+        target_year = new_date.year
+        
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
-        row = c.execute("SELECT start_time, end_time FROM schedule_defaults WHERE day_idx=?", (day_idx,)).fetchone()
+        
+        row = c.execute(
+            "SELECT start_time, end_time FROM schedule_defaults WHERE year=? AND day_idx=?", 
+            (target_year, day_idx)
+        ).fetchone()
         conn.close()
         
         if row:
@@ -146,7 +153,7 @@ def main(page: ft.Page):
         value="None"
     )
 
-    # 4. Differentials - REVERTED to ft.KeyboardType.NUMBER
+    # 4. Differentials
     txt_ojti = ft.TextField(
         label="OJTI (HH:MM)", 
         value="",
@@ -177,14 +184,12 @@ def main(page: ft.Page):
             ojti = parse_time(txt_ojti.value)
             cic = parse_time(txt_cic.value)
             
-            # REVERTED: Original logic
             leave_val = dd_leave.value
             if leave_val == "None": leave_val = None
 
             s_val = txt_start.value.strip()
             e_val = txt_end.value.strip()
             
-            # REVERTED: Restored validation
             if s_val and len(s_val) != 5: raise ValueError("Start Time must be HH:MM")
             if e_val and len(e_val) != 5: raise ValueError("End Time must be HH:MM")
 
@@ -228,7 +233,6 @@ def main(page: ft.Page):
         payload = [dict(row) for row in rows]
 
         try:
-            # CHANGED: Appending endpoint to base URL
             response = requests.post(f"{DESKTOP_URL}/mobile_sync", json=payload, timeout=5)
 
             if response.status_code == 200:
@@ -237,7 +241,6 @@ def main(page: ft.Page):
                 lbl_status.value = f"Synced {len(rows)} entries."
                 lbl_status.color = "green"
             else:
-                # REVERTED: Variable name 'response'
                 lbl_status.value = f"Server Error: {response.status_code}"
                 lbl_status.color = "red"
 
@@ -248,12 +251,10 @@ def main(page: ft.Page):
             conn.close()
             page.update()
 
-    # NEW: Function to get defaults
     def get_defaults_click(e):
         lbl_status.value = "Downloading defaults..."
         page.update()
         try:
-            # Calls the new endpoint
             response = requests.get(f"{DESKTOP_URL}/get_schedule_defaults", timeout=5)
             
             if response.status_code == 200:
@@ -262,13 +263,20 @@ def main(page: ft.Page):
                 c = conn.cursor()
                 c.execute("DELETE FROM schedule_defaults")
                 
-                for day_idx, times in data.items():
-                    c.execute("INSERT INTO schedule_defaults (day_idx, start_time, end_time) VALUES (?, ?, ?)",
-                              (int(day_idx), times['start'], times['end']))
+                # UPDATED: Insert new format (Year, Day, Start, End)
+                for item in data:
+                    c.execute(
+                        "INSERT INTO schedule_defaults (year, day_idx, start_time, end_time) VALUES (?, ?, ?, ?)",
+                        (item['year'], item['day'], item['start'], item['end'])
+                    )
+                
                 conn.commit()
                 conn.close()
                 lbl_status.value = "Defaults updated!"
                 lbl_status.color = "green"
+                
+                # Refresh current view logic
+                change_date(None)
             else:
                 lbl_status.value = f"Error: {response.status_code}"
                 lbl_status.color = "red"
@@ -289,7 +297,6 @@ def main(page: ft.Page):
             ft.Divider(),
             ft.ElevatedButton("Save Local", icon=ft.Icons.SAVE, on_click=save_local_click, width=400),
             ft.ElevatedButton("Sync to PC", icon=ft.Icons.WIFI, on_click=sync_to_pc_click, width=400),
-            # NEW BUTTON
             ft.ElevatedButton("Get Defaults", icon=ft.Icons.DOWNLOAD, on_click=get_defaults_click, width=400),
             ft.Container(height=10),
             lbl_status
