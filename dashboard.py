@@ -136,8 +136,8 @@ with tab_facts:
         # Columns for side-by-side layout
         h_col1, h_col2 = st.columns(2)
         
-        # FIX: Calculate exact height to remove scrollbar (Rows + Header * 40px)
-        t_height = (len(df_actual) + 1) * 40
+        # FIX: Calculate exact height to remove scrollbar (Rows + Header * 36px)
+        t_height = (len(df_actual) + 1) * 36
 
         with h_col1:
             st.caption("**Actual Calendar**")
