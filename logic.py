@@ -381,7 +381,42 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
         rows.append([label, rate, hrs, amt, ytd])
     
     e_df = pd.DataFrame(rows, columns=['type', 'rate', 'hours_current', 'amount_current', 'amount_ytd'])
+    # 1. Labels updated to match Standard FAA Paystubs
+    if total_reg_hours > 0: 
+        items.append(("Regular", base_rate, total_reg_hours, amt_reg_total))
+    
+    if amt_cip: items.append(("Controller Incentive Pay", r_cip, total_reg_hours, amt_cip))
+    
+    if t_ot:
+        items.append(("FLSA Premium", r_flsa, t_ot, amt_flsa))
+        items.append(("True Overtime", base_rate, t_ot, amt_true_ot))
+        
+    if t_night: items.append(("Night Differential", r_night, t_night, amt_night))
+    if t_sun: items.append(("Sunday Premium", r_sun, t_sun, amt_sun))
+    if t_hol_work: items.append(("Holiday Worked", base_rate, t_hol_work, amt_hol))
+    if t_ojti: items.append(("OJTI", r_ojti, t_ojti, amt_ojti))
+    if t_cic: items.append(("CIC", r_cic, t_cic, amt_cic))
+    
+    for label, rate, hrs, amt in items:
+        ytd = get_ref_ytd(label, amt)
+        rows.append([label, rate, hrs, amt, ytd])
+    
+    e_df = pd.DataFrame(rows, columns=['type', 'rate', 'hours_current', 'amount_current', 'amount_ytd'])
     e_df['hours_adjusted'] = 0.0; e_df['amount_adjusted'] = 0.0
+
+    # --- FIX: Convert Decimal Hours to HH:MM String for Display ---
+    def fmt_hours(val):
+        if not val or val < 0.001: return ""
+        # Handle the 59.999 -> 60 minute rollover correctly
+        total_minutes = int(round(val * 60))
+        h = total_minutes // 60
+        m = total_minutes % 60
+        return f"{h}:{m:02d}"
+
+    # Apply formatting to the 'hours_current' column
+    # We do this LAST so it doesn't interfere with any math if we added more steps later
+    e_df['hours_current'] = e_df['hours_current'].apply(fmt_hours)
+    # -------------------------------------------------------------
 
     # Leave Recalc
     l_rows = []
@@ -389,10 +424,17 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     if not actual_leave.empty:
         for _, row in actual_leave.iterrows():
             if any(x in row['type'] for x in target_leaves):
-                end = row['balance_start'] + row['earned_current']
+                # Ensure we handle potential missing values cleanly
+                bal_start = row.get('balance_start', 0.0)
+                earned = row.get('earned_current', 0.0)
+                end = bal_start + earned
+                
                 l_rows.append({
-                    'type': row['type'], 'balance_start': row['balance_start'],
-                    'earned_current': row['earned_current'], 'used_current': 0.0, 'balance_end': end
+                    'type': row['type'], 
+                    'balance_start': bal_start,
+                    'earned_current': earned, 
+                    'used_current': 0.0, 
+                    'balance_end': end
                 })
     l_df = pd.DataFrame(l_rows)
 
