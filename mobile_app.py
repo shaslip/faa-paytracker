@@ -59,9 +59,13 @@ def main(page: ft.Page):
     )
     page.overlay.append(date_picker)
 
+    def open_picker(e):
+        date_picker.open = True
+        page.update()
+
     btn_pick_date = ft.IconButton(
         icon=ft.Icons.CALENDAR_MONTH,
-        on_click=lambda _: date_picker.pick_date()
+        on_click=open_picker  # Use the new handler here
     )
 
     # 2. Shift Times (Start/End)
