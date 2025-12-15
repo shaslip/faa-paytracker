@@ -285,13 +285,19 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
     }
 
 # --- 4. Paycheck Calculator (FLSA Weighted Average) ---
+# Payroll System appears to use 4-Decimal Truncation in calculations
+def truncate_hours(val):
+    """Truncates to 4 decimal places to match legacy payroll systems."""
+    return math.floor(val * 10000) / 10000.0
+    
 def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, actual_leave, ref_earnings):
-    # Sum buckets
-    t_reg = buckets_df['Regular'].sum()
-    t_ot = buckets_df['Overtime'].sum()
-    t_night = buckets_df['Night'].sum()
-    t_sun = buckets_df['Sunday'].sum()
-    t_hol_work = buckets_df['Holiday'].sum() 
+    # Sum buckets (Truncated to 4 decimals to match payroll system precision)
+    t_reg = int(buckets_df['Regular'].sum() * 10000) / 10000.0
+    t_ot = int(buckets_df['Overtime'].sum() * 10000) / 10000.0
+    t_night = int(buckets_df['Night'].sum() * 10000) / 10000.0
+    t_sun = int(buckets_df['Sunday'].sum() * 10000) / 10000.0
+    t_hol_work = int(buckets_df['Holiday'].sum() * 10000) / 10000.0
+    
     t_hol_leave = buckets_df.get('Hol_Leave', pd.Series(0)).sum() if 'Hol_Leave' in buckets_df else 0.0
     t_ojti = buckets_df['OJTI'].sum()
     t_cic = buckets_df['CIC'].sum()
