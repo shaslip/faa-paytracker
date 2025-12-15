@@ -1,4 +1,4 @@
-# FAA PayTracker & Audit System
+# PayTracker & Audit System
 
 A local Python-based dashboard to audit paystubs, detect payroll anomalies, and track missed payments during government shutdowns. Coded with the assistance of AI, and not currently ready for any type of real-world use.
 
