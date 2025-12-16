@@ -414,13 +414,22 @@ def main(page: ft.Page):
 
         pending_table.rows.clear()
         
+        # Helper: Convert 1.5 -> "1:30"
+        def fmt_hours(val):
+            if not val or val <= 0: return "-"
+            h = int(val)
+            m = int(round((val - h) * 60))
+            return f"{h}:{m:02d}"
+
         for d, s, e, l, o, c in rows:
             # Display "-" for blanks, but show ALL data regardless of defaults
             s_disp = s if s else "-"
             e_disp = e if e else "-"
             l_disp = l if l and l != "None" else "-"
-            o_disp = str(o) if o and o > 0 else "-"
-            c_disp = str(c) if c and c > 0 else "-"
+            
+            # Apply the formatting here
+            o_disp = fmt_hours(o)
+            c_disp = fmt_hours(c)
 
             pending_table.rows.append(
                 ft.DataRow(cells=[
