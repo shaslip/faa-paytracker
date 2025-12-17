@@ -468,6 +468,7 @@ def main(page: ft.Page):
     page.add(t)
     load_holidays_from_db()
     load_pending_queue()
+    change_date(None)
 
 if __name__ == "__main__":
     ft.app(target=main)
