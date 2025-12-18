@@ -126,7 +126,11 @@ def main(page: ft.Page):
     txt_ip = ft.TextField(label="Server URL", value=current_ip)
     settings_dialog = ft.AlertDialog(
         title=ft.Text("Settings"),
-        content=txt_ip,
+        content=ft.Column([
+            txt_ip,
+            ft.Container(height=10),
+            ft.Text(f"Version: {APP_VERSION}", size=12, color=ft.Colors.GREY_500)
+        ], tight=True, width=300),  # tight=True makes it fit content height
         actions=[
             ft.TextButton("Save", on_click=save_settings),
             ft.TextButton("Cancel", on_click=lambda e: setattr(settings_dialog, 'open', False) or page.update()),
