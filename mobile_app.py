@@ -377,7 +377,7 @@ def main(page: ft.Page):
             ft.ElevatedButton("Save Local", icon=ft.Icons.SAVE, on_click=save_local_click, width=400),
             ft.Row([
                 ft.ElevatedButton("Sync to PC", icon=ft.Icons.UPLOAD, on_click=sync_to_pc_click, expand=True),
-                ft.ElevatedButton("Get Updates", icon=ft.Icons.DOWNLOAD, on_click=get_updates_click, expand=True),
+                ft.ElevatedButton("Download schedule", icon=ft.Icons.DOWNLOAD, on_click=get_updates_click, expand=True),
             ]),
             ft.Container(height=10),
             lbl_status
