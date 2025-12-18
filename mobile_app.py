@@ -73,6 +73,40 @@ def main(page: ft.Page):
     stored_ip = page.client_storage.get("server_ip")
     current_ip = stored_ip if stored_ip else DEFAULT_IP
 
+    def check_for_update():
+        try:
+            # Short timeout so app doesn't hang if offline
+            r = requests.get(UPDATE_URL, timeout=3)
+            if r.status_code == 200:
+                data = r.json()
+                latest = data.get("latest_version", "0.0.0")
+                apk_url = data.get("apk_url", "")
+
+                # Simple string compare (or use packaging.version for robust handling)
+                if latest > APP_VERSION:
+                    show_update_dialog(latest, apk_url)
+        except:
+            pass # Fail silently if offline
+
+    def show_update_dialog(new_ver, url):
+        def dl_update(e):
+            # This opens the system browser to handle the download & install prompt
+            page.launch_url(url)
+            update_dialog.open = False
+            page.update()
+
+        update_dialog = ft.AlertDialog(
+            title=ft.Text("Update Available"),
+            content=ft.Text(f"Version {new_ver} is available."),
+            actions=[
+                ft.TextButton("Update Now", on_click=dl_update),
+                ft.TextButton("Later", on_click=lambda e: setattr(update_dialog, 'open', False) or page.update()),
+            ],
+        )
+        page.overlay.append(update_dialog)
+        update_dialog.open = True
+        page.update()
+
     def get_url():
         return current_ip
 
