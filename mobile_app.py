@@ -60,7 +60,7 @@ def init_db():
     conn.close()
 
 def main(page: ft.Page):
-    APP_VERSION = "1.1"
+    APP_VERSION = "1.2"
     UPDATE_URL = "https://ee-paytracker.s3.us-east-1.amazonaws.com/version.json"
     page.title = "FAA PayTracker"
     page.theme_mode = ft.ThemeMode.LIGHT
