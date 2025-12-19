@@ -292,19 +292,21 @@ def truncate_hours(val):
     return math.floor(val * 10000) / 10000.0
     
 def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, actual_leave, ref_earnings):
-    # Sum buckets (Truncated to 4 decimals to match payroll system precision)
-    t_reg = int(buckets_df['Regular'].sum() * 10000) / 10000.0
-    t_ot = int(buckets_df['Overtime'].sum() * 10000) / 10000.0
-    t_night = int(buckets_df['Night'].sum() * 10000) / 10000.0
-    t_sun = int(buckets_df['Sunday'].sum() * 10000) / 10000.0
-    t_hol_work = int(buckets_df['Holiday'].sum() * 10000) / 10000.0
+    # --- Use the truncation function for ALL time buckets ---
+    t_reg = truncate_hours(buckets_df['Regular'].sum())
+    t_ot = truncate_hours(buckets_df['Overtime'].sum())
+    t_night = truncate_hours(buckets_df['Night'].sum())
+    t_sun = truncate_hours(buckets_df['Sunday'].sum())
+    t_hol_work = truncate_hours(buckets_df['Holiday'].sum())
     
-    t_hol_leave = buckets_df.get('Hol_Leave', pd.Series(0)).sum() if 'Hol_Leave' in buckets_df else 0.0
-    t_ojti = buckets_df['OJTI'].sum()
-    t_cic = buckets_df['CIC'].sum()
+    t_hol_leave = truncate_hours(buckets_df.get('Hol_Leave', pd.Series(0)).sum())
+    
+    # FIX: Apply truncation to OJTI and CIC
+    t_ojti = truncate_hours(buckets_df['OJTI'].sum())
+    t_cic = truncate_hours(buckets_df['CIC'].sum())
 
-    # Aggregate Regular Pay (Worked + Holiday Leave)
-    total_reg_hours = t_reg + t_hol_leave
+    # Aggregate Regular Pay
+    total_reg_hours = truncate_hours(t_reg + t_hol_leave)
     amt_reg_total = round(total_reg_hours * base_rate, 2)
     
     # Base Amounts
@@ -314,8 +316,13 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     r_night = round(base_rate * 0.10, 2); amt_night = round(t_night * r_night, 2)
     r_sun = round(base_rate * 0.25, 2); amt_sun = round(t_sun * r_sun, 2)
     amt_hol = round(t_hol_work * base_rate, 2)
-    r_ojti = round(base_rate * 0.25, 2); amt_ojti = round(t_ojti * r_ojti, 2)
-    r_cic = round(base_rate * 0.10, 2); amt_cic = round(t_cic * r_cic, 2)
+    
+    # Use the truncated hours for OJTI calculation
+    r_ojti = round(base_rate * 0.25, 2)
+    amt_ojti = round(t_ojti * r_ojti, 2) # This should now result in 461.18
+    
+    r_cic = round(base_rate * 0.10, 2)
+    amt_cic = round(t_cic * r_cic, 2)
     
     # CIP Logic
     amt_cip = 0.0; r_cip = 0.0
