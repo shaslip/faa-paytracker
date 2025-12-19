@@ -290,9 +290,13 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
 def truncate_hours(val):
     """Truncates to 4 decimal places to match legacy payroll systems."""
     return math.floor(val * 10000) / 10000.0
+
+def gov_floor(val):
+    """Floors to 2 decimal places (cuts off the partial penny) instead of rounding."""
+    return math.floor(val * 100) / 100.0
     
 def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, actual_leave, ref_earnings):
-    # --- Use the truncation function for ALL time buckets ---
+    # --- FIX 1: Apply truncation to ALL buckets ---
     t_reg = truncate_hours(buckets_df['Regular'].sum())
     t_ot = truncate_hours(buckets_df['Overtime'].sum())
     t_night = truncate_hours(buckets_df['Night'].sum())
@@ -301,7 +305,7 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     
     t_hol_leave = truncate_hours(buckets_df.get('Hol_Leave', pd.Series(0)).sum())
     
-    # FIX: Apply truncation to OJTI and CIC
+    # --- FIX 2: Actually CALL the function for OJTI/CIC ---
     t_ojti = truncate_hours(buckets_df['OJTI'].sum())
     t_cic = truncate_hours(buckets_df['CIC'].sum())
 
@@ -317,12 +321,15 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     r_sun = round(base_rate * 0.25, 2); amt_sun = round(t_sun * r_sun, 2)
     amt_hol = round(t_hol_work * base_rate, 2)
     
-    # Use the truncated hours for OJTI calculation
+    # --- FIX 3: OJTI Calculation ---
+    # 18:22 -> 18.3666 truncate(4) -> 18.3666
+    # 18.3666 * 25.11 = 461.1853...
+    # Standard round() goes to .19. gov_floor() keeps it at .18
     r_ojti = round(base_rate * 0.25, 2)
-    amt_ojti = round(t_ojti * r_ojti, 2) # This should now result in 461.18
+    amt_ojti = gov_floor(t_ojti * r_ojti) 
     
     r_cic = round(base_rate * 0.10, 2)
-    amt_cic = round(t_cic * r_cic, 2)
+    amt_cic = gov_floor(t_cic * r_cic)
     
     # CIP Logic
     amt_cip = 0.0; r_cip = 0.0
@@ -367,7 +374,6 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
                 effective_rate = ref_amt / ref_gross
                 new_amt = round(gross * effective_rate, 2)
             
-            # YTD Logic: If ref_ytd is 0, we assume data is missing/invalid, so we show None
             new_ytd = round(ref_ytd - ref_amt + new_amt, 2) if ref_ytd > 0 else None
 
             deduction_rows.append({'type': d_type, 'amount_current': new_amt, 'amount_ytd': new_ytd, 'code': row.get('code', '')})
@@ -379,7 +385,6 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     # --- Build Earnings Rows ---
     def get_ref_ytd(type_name, new_current):
         if ref_earnings.empty: return new_current
-        # Exact match logic (safer than contains) or fuzzy fallback
         match = ref_earnings[ref_earnings['type'].str.contains(type_name, case=False, regex=False, na=False)]
         
         if not match.empty:
@@ -426,9 +431,8 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
         return f"{h}:{m:02d}"
 
     e_df['hours_current'] = e_df['hours_current'].apply(fmt_hours)
-    # -------------------------------------------------------------
 
-    # Leave Recalc
+    # Leave Recalc (Unchanged)
     l_rows = []
     target_leaves = ['Annual', 'Sick', 'Credit']
     if not actual_leave.empty:
