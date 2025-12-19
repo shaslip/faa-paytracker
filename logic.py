@@ -313,7 +313,7 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     r_night = round(base_rate * 0.10, 2); amt_night = round(t_night * r_night, 2)
     r_sun = round(base_rate * 0.25, 2); amt_sun = round(t_sun * r_sun, 2)
     amt_hol = round(t_hol_work * base_rate, 2)
-    r_ojti = round(base_rate * 0.10, 2); amt_ojti = round(t_ojti * r_ojti, 2)
+    r_ojti = round(base_rate * 0.25, 2); amt_ojti = round(t_ojti * r_ojti, 2)
     r_cic = round(base_rate * 0.10, 2); amt_cic = round(t_cic * r_cic, 2)
     
     # CIP Logic
