@@ -291,16 +291,16 @@ def truncate_hours(val):
     return math.floor(val * 10000) / 10000.0
     
 def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, actual_leave, ref_earnings):
-    # Sum buckets (Truncated to 4 decimals to match payroll system precision)
-    t_reg = int(buckets_df['Regular'].sum() * 10000) / 10000.0
-    t_ot = int(buckets_df['Overtime'].sum() * 10000) / 10000.0
-    t_night = int(buckets_df['Night'].sum() * 10000) / 10000.0
-    t_sun = int(buckets_df['Sunday'].sum() * 10000) / 10000.0
-    t_hol_work = int(buckets_df['Holiday'].sum() * 10000) / 10000.0
+    # Sum buckets (ALL truncated to 4 decimals to match payroll system precision)
+    t_reg = truncate_hours(buckets_df['Regular'].sum())
+    t_ot = truncate_hours(buckets_df['Overtime'].sum())
+    t_night = truncate_hours(buckets_df['Night'].sum())
+    t_sun = truncate_hours(buckets_df['Sunday'].sum())
+    t_hol_work = truncate_hours(buckets_df['Holiday'].sum())
     
-    t_hol_leave = buckets_df.get('Hol_Leave', pd.Series(0)).sum() if 'Hol_Leave' in buckets_df else 0.0
-    t_ojti = buckets_df['OJTI'].sum()
-    t_cic = buckets_df['CIC'].sum()
+    t_hol_leave = truncate_hours(buckets_df.get('Hol_Leave', pd.Series(0)).sum()) if 'Hol_Leave' in buckets_df else 0.0
+    t_ojti = truncate_hours(buckets_df['OJTI'].sum())
+    t_cic = truncate_hours(buckets_df['CIC'].sum())
 
     # Aggregate Regular Pay (Worked + Holiday Leave)
     total_reg_hours = t_reg + t_hol_leave
