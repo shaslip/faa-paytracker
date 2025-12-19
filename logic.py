@@ -314,12 +314,12 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     # Base Amounts
     amt_true_ot = truncate_cents(t_ot * base_rate) if t_ot > 0 else 0.0
     
-    # Differentials
-    r_night = truncate_cents(base_rate * 0.10); amt_night = truncate_cents(t_night * r_night)
-    r_sun = truncate_cents(base_rate * 0.25); amt_sun = truncate_cents(t_sun * r_sun)
+    # Differentials - Keep rates at full precision, only truncate final amounts
+    r_night = base_rate * 0.10; amt_night = truncate_cents(t_night * r_night)
+    r_sun = base_rate * 0.25; amt_sun = truncate_cents(t_sun * r_sun)
     amt_hol = truncate_cents(t_hol_work * base_rate)
-    r_ojti = truncate_cents(base_rate * 0.25); amt_ojti = truncate_cents(t_ojti * r_ojti)
-    r_cic = truncate_cents(base_rate * 0.10); amt_cic = truncate_cents(t_cic * r_cic)
+    r_ojti = base_rate * 0.25; amt_ojti = truncate_cents(t_ojti * r_ojti)
+    r_cic = base_rate * 0.10; amt_cic = truncate_cents(t_cic * r_cic)
     
     # CIP Logic
     amt_cip = 0.0; r_cip = 0.0
@@ -332,7 +332,7 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
              if hist_reg > 0:
                  factor = hist_cip / hist_reg
                  amt_cip = truncate_cents(amt_reg_total * factor)
-                 r_cip = truncate_cents(base_rate * factor)
+                 r_cip = base_rate * factor
     
     # FLSA Calculation
     amt_flsa = 0.0; r_flsa = 0.0
@@ -341,7 +341,7 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
         hrs = total_reg_hours + t_ot
         if hrs > 0:
             rrp = remun / hrs
-            r_flsa = truncate_cents(rrp * 0.5)
+            r_flsa = rrp * 0.5
             amt_flsa = truncate_cents(t_ot * r_flsa)
     
     # Calculate Gross & Deductions
