@@ -290,36 +290,32 @@ def calculate_daily_breakdown(date_str, act_start, act_end, leave_type, ojti, ci
 def truncate_hours(val):
     """Truncates to 4 decimal places to match legacy payroll systems."""
     return math.floor(val * 10000) / 10000.0
-
-def truncate_cents(val):
-    """Truncates to 2 decimal places (cents) to match payroll systems."""
-    return math.floor(val * 100) / 100.0
     
 def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, actual_leave, ref_earnings):
-    # Sum buckets (ALL truncated to 4 decimals to match payroll system precision)
-    t_reg = truncate_hours(buckets_df['Regular'].sum())
-    t_ot = truncate_hours(buckets_df['Overtime'].sum())
-    t_night = truncate_hours(buckets_df['Night'].sum())
-    t_sun = truncate_hours(buckets_df['Sunday'].sum())
-    t_hol_work = truncate_hours(buckets_df['Holiday'].sum())
+    # Sum buckets (Truncated to 4 decimals to match payroll system precision)
+    t_reg = int(buckets_df['Regular'].sum() * 10000) / 10000.0
+    t_ot = int(buckets_df['Overtime'].sum() * 10000) / 10000.0
+    t_night = int(buckets_df['Night'].sum() * 10000) / 10000.0
+    t_sun = int(buckets_df['Sunday'].sum() * 10000) / 10000.0
+    t_hol_work = int(buckets_df['Holiday'].sum() * 10000) / 10000.0
     
-    t_hol_leave = truncate_hours(buckets_df.get('Hol_Leave', pd.Series(0)).sum()) if 'Hol_Leave' in buckets_df else 0.0
-    t_ojti = truncate_hours(buckets_df['OJTI'].sum())
-    t_cic = truncate_hours(buckets_df['CIC'].sum())
-    
+    t_hol_leave = buckets_df.get('Hol_Leave', pd.Series(0)).sum() if 'Hol_Leave' in buckets_df else 0.0
+    t_ojti = buckets_df['OJTI'].sum()
+    t_cic = buckets_df['CIC'].sum()
+
     # Aggregate Regular Pay (Worked + Holiday Leave)
     total_reg_hours = t_reg + t_hol_leave
-    amt_reg_total = truncate_cents(total_reg_hours * base_rate)
+    amt_reg_total = round(total_reg_hours * base_rate, 2)
     
     # Base Amounts
-    amt_true_ot = truncate_cents(t_ot * base_rate) if t_ot > 0 else 0.0
+    amt_true_ot = round(t_ot * base_rate, 2) if t_ot > 0 else 0.0
     
-    # Differentials - Keep rates at full precision, only truncate final amounts
-    r_night = base_rate * 0.10; amt_night = truncate_cents(t_night * r_night)
-    r_sun = base_rate * 0.25; amt_sun = truncate_cents(t_sun * r_sun)
-    amt_hol = truncate_cents(t_hol_work * base_rate)
-    r_ojti = base_rate * 0.25; amt_ojti = truncate_cents(t_ojti * r_ojti)
-    r_cic = base_rate * 0.10; amt_cic = truncate_cents(t_cic * r_cic)
+    # Differentials
+    r_night = round(base_rate * 0.10, 2); amt_night = round(t_night * r_night, 2)
+    r_sun = round(base_rate * 0.25, 2); amt_sun = round(t_sun * r_sun, 2)
+    amt_hol = round(t_hol_work * base_rate, 2)
+    r_ojti = round(base_rate * 0.25, 2); amt_ojti = round(t_ojti * r_ojti, 2)
+    r_cic = round(base_rate * 0.10, 2); amt_cic = round(t_cic * r_cic, 2)
     
     # CIP Logic
     amt_cip = 0.0; r_cip = 0.0
@@ -331,9 +327,9 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
              hist_reg = reg_row.iloc[0]['amount_current']
              if hist_reg > 0:
                  factor = hist_cip / hist_reg
-                 amt_cip = truncate_cents(amt_reg_total * factor)
-                 r_cip = base_rate * factor
-    
+                 amt_cip = round(amt_reg_total * factor, 2)
+                 r_cip = round(base_rate * factor, 2)
+
     # FLSA Calculation
     amt_flsa = 0.0; r_flsa = 0.0
     if t_ot > 0:
@@ -341,9 +337,9 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
         hrs = total_reg_hours + t_ot
         if hrs > 0:
             rrp = remun / hrs
-            r_flsa = rrp * 0.5
-            amt_flsa = truncate_cents(t_ot * r_flsa)
-    
+            r_flsa = round(rrp * 0.5, 2)
+            amt_flsa = round(t_ot * r_flsa, 2)
+
     # Calculate Gross & Deductions
     gross = amt_reg_total + amt_true_ot + amt_flsa + amt_night + amt_sun + amt_hol + amt_cip + amt_ojti + amt_cic
     
@@ -362,12 +358,14 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
             is_variable = any(x in d_type for x in PERCENTAGE_BASED)
             if is_variable and ref_gross > 0:
                 effective_rate = ref_amt / ref_gross
-                new_amt = truncate_cents(gross * effective_rate)
+                new_amt = round(gross * effective_rate, 2)
             
             # YTD Logic: If ref_ytd is 0, we assume data is missing/invalid, so we show None
-            new_ytd = truncate_cents(ref_ytd - ref_amt + new_amt) if ref_ytd > 0 else None
+            new_ytd = round(ref_ytd - ref_amt + new_amt, 2) if ref_ytd > 0 else None
+
             deduction_rows.append({'type': d_type, 'amount_current': new_amt, 'amount_ytd': new_ytd, 'code': row.get('code', '')})
             total_deducs += new_amt
+
     d_df = pd.DataFrame(deduction_rows)
     net = gross - total_deducs
 
