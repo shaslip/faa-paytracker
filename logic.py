@@ -24,32 +24,33 @@ def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched_
 
     for _, stub in sorted_stubs.iterrows():
         pe = stub['period_ending']
-        
-        # 1. Fetch Historical Context (Rate & Schedule) for THIS specific year
         cur_rate, cur_ded, cur_earn = models.get_reference_data(stub['id'])
-        
         pe_date = datetime.strptime(pe, "%Y-%m-%d")
-        # Fetch the schedule specific to this paystub's year
-        # We ignore the 'std_sched_ignored' argument passed from dashboard
         hist_sched = models.get_user_schedule(pe_date.year).set_index('day_of_week')
 
-        # Check if the user has explicitly SAVED a timesheet for this period
         is_audited = models.has_saved_timesheet(pe) 
 
         if not is_audited:
-            # OPTION 1: The "Ignorance is Bliss" Approach
             expected_gross = stub['gross_pay']
             diff = 0.0
             status = "⚪ Unaudited"
-            
         else:
             ts_v2 = models.load_timesheet_v2(pe)
             bucket_rows = []
             for _, row in ts_v2.iterrows():
-                # ... (breakdown logic) ...
+                s_raw = row['Start']
+                e_raw = row['End']
+                s_obj = pd.to_datetime(s_raw, format='%H:%M').time() if s_raw and s_raw != "None" else None
+                e_obj = pd.to_datetime(e_raw, format='%H:%M').time() if e_raw and e_raw != "None" else None
+                
+                # --- THIS LINE DEFINES 'b' ---
+                b = calculate_daily_breakdown(
+                    row['Date'], s_obj, e_obj, row['Leave_Type'], 
+                    row['OJTI'], row['CIC'], hist_sched
+                )
                 bucket_rows.append(b)
             
-            # FIX: Added "Leave_Hrs" to the columns list
+            # Use the correct columns including Leave_Hrs
             cols = ["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "Leave_Hrs", "OJTI", "CIC"]
             buckets = pd.DataFrame(bucket_rows, columns=cols)
             buckets = buckets.fillna(0.0)
@@ -57,16 +58,13 @@ def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched_
             exp_data = calculate_expected_pay(buckets, cur_rate, stub, pd.DataFrame(), pd.DataFrame(), cur_earn)
             expected_gross = exp_data['stub']['gross_pay']
             
-            # Calculate Difference
             diff = stub['gross_pay'] - expected_gross
             status = "✅ Balanced"
             
             if diff < -1.0: status = "🔴 Gov Owes You"
             elif diff > 1.0: status = "🟢 Backpay/Surplus"
 
-        # Update Running Balance
         running_balance += diff
-        
         ledger.append({
             "Period Ending": pe,
             "Expected": expected_gross,
