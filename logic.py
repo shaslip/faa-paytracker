@@ -296,7 +296,6 @@ def gov_floor(val):
     return math.floor(val * 100) / 100.0
     
 def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, actual_leave, ref_earnings):
-    # --- FIX 1: Apply truncation to ALL buckets ---
     t_reg = truncate_hours(buckets_df['Regular'].sum())
     t_ot = truncate_hours(buckets_df['Overtime'].sum())
     t_night = truncate_hours(buckets_df['Night'].sum())
