@@ -289,55 +289,55 @@ def gov_floor(val):
     return math.floor(val * 100) / 100.0
     
 def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, actual_leave, ref_earnings):
+    # 1. Truncate all buckets
     t_reg = truncate_hours(buckets_df['Regular'].sum())
     t_ot = truncate_hours(buckets_df['Overtime'].sum())
     t_night = truncate_hours(buckets_df['Night'].sum())
     t_sun = truncate_hours(buckets_df['Sunday'].sum())
     t_hol_work = truncate_hours(buckets_df['Holiday'].sum())
-    t_leave_reg = truncate_hours(buckets_df.get('Leave_Hrs', pd.Series(0)).sum())    
-    t_hol_leave = truncate_hours(buckets_df.get('Hol_Leave', pd.Series(0)).sum())
-    
-    # --- FIX 2: Actually CALL the function for OJTI/CIC ---
+    t_leave_reg = truncate_hours(buckets_df.get('Leave_Hrs', pd.Series(0.0)).sum())    
+    t_hol_leave = truncate_hours(buckets_df.get('Hol_Leave', pd.Series(0.0)).sum())
     t_ojti = truncate_hours(buckets_df['OJTI'].sum())
     t_cic = truncate_hours(buckets_df['CIC'].sum())
 
-    # Aggregate Regular Pay
+    # 2. Aggregate Regular Pay (Worked + Holiday Leave + Annual/Sick/Credit Leave)
     total_reg_hours = truncate_hours(t_reg + t_hol_leave + t_leave_reg)
     amt_reg_total = round(total_reg_hours * base_rate, 2)
     
-    # Base Amounts
+    # 3. Base Amounts
     amt_true_ot = round(t_ot * base_rate, 2) if t_ot > 0 else 0.0
     
-    # Differentials
-    r_night = round(base_rate * 0.10, 2); amt_night = round(t_night * r_night, 2)
-    r_sun = round(base_rate * 0.25, 2); amt_sun = round(t_sun * r_sun, 2)
+    # 4. Differentials
+    r_night = round(base_rate * 0.10, 2)
+    amt_night = round(t_night * r_night, 2)
+    r_sun = round(base_rate * 0.25, 2)
+    amt_sun = round(t_sun * r_sun, 2)
     amt_hol = round(t_hol_work * base_rate, 2)
     
-    # --- FIX 3: OJTI Calculation ---
-    # 18:22 -> 18.3666 truncate(4) -> 18.3666
-    # 18.3666 * 25.11 = 461.1853...
-    # Standard round() goes to .19. gov_floor() keeps it at .18
+    # 5. OJTI/CIC Calculation
     r_ojti = round(base_rate * 0.25, 2)
     amt_ojti = gov_floor(t_ojti * r_ojti) 
     
     r_cic = round(base_rate * 0.10, 2)
     amt_cic = gov_floor(t_cic * r_cic)
     
-    # CIP Logic
-    amt_cip = 0.0; r_cip = 0.0
+    # 6. CIP Logic
+    amt_cip = 0.0
+    r_cip = 0.0
     if not ref_earnings.empty:
-         cip_row = ref_earnings[ref_earnings['type'].str.contains('Controller Incentive', case=False, na=False)]
-         reg_row = ref_earnings[ref_earnings['type'].str.contains('Regular', case=False, na=False)]
-         if not cip_row.empty and not reg_row.empty:
-             hist_cip = cip_row.iloc[0]['amount_current']
-             hist_reg = reg_row.iloc[0]['amount_current']
-             if hist_reg > 0:
-                 factor = hist_cip / hist_reg
-                 amt_cip = round(amt_reg_total * factor, 2)
-                 r_cip = round(base_rate * factor, 2)
+        cip_row = ref_earnings[ref_earnings['type'].str.contains('Controller Incentive', case=False, na=False)]
+        reg_row = ref_earnings[ref_earnings['type'].str.contains('Regular', case=False, na=False)]
+        if not cip_row.empty and not reg_row.empty:
+            hist_cip = cip_row.iloc[0]['amount_current']
+            hist_reg = reg_row.iloc[0]['amount_current']
+            if hist_reg > 0:
+                factor = hist_cip / hist_reg
+                amt_cip = round(amt_reg_total * factor, 2)
+                r_cip = round(base_rate * factor, 2)
 
-    # FLSA Calculation
-    amt_flsa = 0.0; r_flsa = 0.0
+    # 7. FLSA Calculation
+    amt_flsa = 0.0
+    r_flsa = 0.0
     if t_ot > 0:
         remun = amt_reg_total + amt_true_ot + amt_night + amt_sun + amt_hol + amt_cip + amt_ojti + amt_cic
         hrs = total_reg_hours + t_ot
@@ -346,7 +346,7 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
             r_flsa = round(rrp * 0.5, 2)
             amt_flsa = round(t_ot * r_flsa, 2)
 
-    # Calculate Gross & Deductions
+    # 8. Calculate Gross & Deductions
     gross = amt_reg_total + amt_true_ot + amt_flsa + amt_night + amt_sun + amt_hol + amt_cip + amt_ojti + amt_cic
     
     deduction_rows = []
@@ -366,7 +366,7 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
                 effective_rate = ref_amt / ref_gross
                 new_amt = round(gross * effective_rate, 2)
             
-            new_ytd = round(ref_ytd - ref_amt + new_amt, 2) if ref_ytd > 0 else None
+            new_ytd = round(ref_ytd - ref_amt + new_amt, 2) if (ref_ytd is not None and ref_ytd > 0) else None
 
             deduction_rows.append({'type': d_type, 'amount_current': new_amt, 'amount_ytd': new_ytd, 'code': row.get('code', '')})
             total_deducs += new_amt
@@ -374,50 +374,47 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     d_df = pd.DataFrame(deduction_rows)
     net = gross - total_deducs
 
-    # --- Build Earnings Rows ---
+    # 9. Build Earnings Rows
     def get_ref_ytd(type_name, new_current):
         if ref_earnings.empty: return new_current
         match = ref_earnings[ref_earnings['type'].str.contains(type_name, case=False, regex=False, na=False)]
-        
         if not match.empty:
             r_ytd = match.iloc[0]['amount_ytd']
             r_curr = match.iloc[0]['amount_current']
-            
-            if r_ytd <= 0.01: return None
-                
-            return round(r_ytd - r_curr + new_current, 2)
-            
+            if r_ytd is not None and r_ytd > 0.01:
+                return round(r_ytd - r_curr + new_current, 2)
         return None 
 
     rows = []
     items = []
-    
     if total_reg_hours > 0: 
         items.append(("Regular", base_rate, total_reg_hours, amt_reg_total))
-    
-    if amt_cip: items.append(("Controller Incentive Pay", r_cip, total_reg_hours, amt_cip))
-    
+    if amt_cip: 
+        items.append(("Controller Incentive Pay", r_cip, total_reg_hours, amt_cip))
     if t_ot:
         items.append(("FLSA Premium", r_flsa, t_ot, amt_flsa))
         items.append(("True Overtime", base_rate, t_ot, amt_true_ot))
-        
-    if t_night: items.append(("Night Differential", r_night, t_night, amt_night))
-    if t_sun: items.append(("Sunday Premium", r_sun, t_sun, amt_sun))
-    if t_hol_work: items.append(("Holiday Worked", base_rate, t_hol_work, amt_hol))
-    if t_ojti: items.append(("OJTI", r_ojti, t_ojti, amt_ojti))
-    if t_cic: items.append(("CIC", r_cic, t_cic, amt_cic))
+    if t_night: 
+        items.append(("Night Differential", r_night, t_night, amt_night))
+    if t_sun: 
+        items.append(("Sunday Premium", r_sun, t_sun, amt_sun))
+    if t_hol_work: 
+        items.append(("Holiday Worked", base_rate, t_hol_work, amt_hol))
+    if t_ojti: 
+        items.append(("OJTI", r_ojti, t_ojti, amt_ojti))
+    if t_cic: 
+        items.append(("CIC", r_cic, t_cic, amt_cic))
     
     for label, rate, hrs, amt in items:
         ytd = get_ref_ytd(label, amt)
         rows.append([label, rate, hrs, amt, ytd])
     
     e_df = pd.DataFrame(rows, columns=['type', 'rate', 'hours_current', 'amount_current', 'amount_ytd'])
+    
+    # Apply formatting (This fixes 72:00 vs 80:00 display)
     e_df['hours_current'] = e_df['hours_current'].apply(fmt_hours)
 
-    # 3. Apply the formatter to the NEW column
-    e_df['hours_current'] = e_df['hours_current'].apply(fmt_hours)
-
-    # Leave Recalc (Unchanged)
+    # 10. Leave Recalc
     l_rows = []
     target_leaves = ['Annual', 'Sick', 'Credit']
     if not actual_leave.empty:
@@ -426,7 +423,6 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
                 bal_start = row.get('balance_start', 0.0)
                 earned = row.get('earned_current', 0.0)
                 end = bal_start + earned
-                
                 l_rows.append({
                     'type': row['type'], 
                     'balance_start': bal_start,
@@ -437,6 +433,10 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     l_df = pd.DataFrame(l_rows)
 
     stub = actual_meta.copy()
-    stub.update({'gross_pay': gross, 'net_pay': net, 'total_deductions': total_deducs, 'remarks': 'GENERATED V2\nWeighted Avg FLSA'})
+    # If actual_meta is a series/dict, we update it. If it's a DF row, handles similarly.
+    stub['gross_pay'] = gross
+    stub['net_pay'] = net
+    stub['total_deductions'] = total_deducs
+    stub['remarks'] = 'GENERATED V2\nWeighted Avg FLSA'
     
     return {'stub': stub, 'earnings': e_df, 'deductions': d_df, 'leave': l_df}
