@@ -302,6 +302,7 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     t_night = truncate_hours(buckets_df['Night'].sum())
     t_sun = truncate_hours(buckets_df['Sunday'].sum())
     t_hol_work = truncate_hours(buckets_df['Holiday'].sum())
+    t_leave_reg = truncate_hours(buckets_df.get('Leave_Hrs', pd.Series(0)).sum())
     
     t_hol_leave = truncate_hours(buckets_df.get('Hol_Leave', pd.Series(0)).sum())
     
@@ -310,7 +311,7 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     t_cic = truncate_hours(buckets_df['CIC'].sum())
 
     # Aggregate Regular Pay
-    total_reg_hours = truncate_hours(t_reg + t_hol_leave)
+    total_reg_hours = truncate_hours(t_reg + t_hol_leave + t_leave_reg)
     amt_reg_total = round(total_reg_hours * base_rate, 2)
     
     # Base Amounts
