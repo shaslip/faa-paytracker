@@ -43,31 +43,17 @@ def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched_
             status = "⚪ Unaudited"
             
         else:
-            # You entered data -> We trust YOU.
             ts_v2 = models.load_timesheet_v2(pe)
-            
             bucket_rows = []
             for _, row in ts_v2.iterrows():
-                # Convert string times to datetime objects if they exist
-                s_raw = row['Start']
-                e_raw = row['End']
-                
-                s_obj = pd.to_datetime(s_raw, format='%H:%M').time() if s_raw and s_raw != "None" else None
-                e_obj = pd.to_datetime(e_raw, format='%H:%M').time() if e_raw and e_raw != "None" else None
-                
-                # Pass the HISTORICAL schedule to the breakdown
-                b = calculate_daily_breakdown(
-                    row['Date'], s_obj, e_obj, row['Leave_Type'], 
-                    row['OJTI'], row['CIC'], hist_sched
-                )
+                # ... (breakdown logic) ...
                 bucket_rows.append(b)
             
-            # Create DataFrame with explicit columns to prevent empty-list crashes
-            cols = ["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"]
+            # FIX: Added "Leave_Hrs" to the columns list
+            cols = ["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "Leave_Hrs", "OJTI", "CIC"]
             buckets = pd.DataFrame(bucket_rows, columns=cols)
             buckets = buckets.fillna(0.0)
 
-            # Calculate Expected Gross using the HISTORICAL rate
             exp_data = calculate_expected_pay(buckets, cur_rate, stub, pd.DataFrame(), pd.DataFrame(), cur_earn)
             expected_gross = exp_data['stub']['gross_pay']
             
@@ -291,6 +277,13 @@ def truncate_hours(val):
     """Truncates to 4 decimal places to match legacy payroll systems."""
     return math.floor(val * 10000) / 10000.0
 
+def fmt_hours(val):
+    if not val or val < 0.001: return ""
+    total_minutes = int(round(val * 60))
+    h = total_minutes // 60
+    m = total_minutes % 60
+    return f"{h}:{m:02d}"
+
 def gov_floor(val):
     """Floors to 2 decimal places (cuts off the partial penny) instead of rounding."""
     return math.floor(val * 100) / 100.0
@@ -301,8 +294,7 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     t_night = truncate_hours(buckets_df['Night'].sum())
     t_sun = truncate_hours(buckets_df['Sunday'].sum())
     t_hol_work = truncate_hours(buckets_df['Holiday'].sum())
-    t_leave_reg = truncate_hours(buckets_df.get('Leave_Hrs', pd.Series(0)).sum())
-    
+    t_leave_reg = truncate_hours(buckets_df.get('Leave_Hrs', pd.Series(0)).sum())    
     t_hol_leave = truncate_hours(buckets_df.get('Hol_Leave', pd.Series(0)).sum())
     
     # --- FIX 2: Actually CALL the function for OJTI/CIC ---
@@ -420,19 +412,9 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
         rows.append([label, rate, hrs, amt, ytd])
     
     e_df = pd.DataFrame(rows, columns=['type', 'rate', 'hours_current', 'amount_current', 'amount_ytd'])
-    e_df['hours_adjusted'] = 0.0; e_df['amount_adjusted'] = 0.0
-
-    # 3. Apply the formatter to the NEW column
     e_df['hours_current'] = e_df['hours_current'].apply(fmt_hours)
 
-    # --- Helper: Convert Decimal Hours to HH:MM String for Display ---
-    def fmt_hours(val):
-        if not val or val < 0.001: return ""
-        total_minutes = int(round(val * 60))
-        h = total_minutes // 60
-        m = total_minutes % 60
-        return f"{h}:{m:02d}"
-
+    # 3. Apply the formatter to the NEW column
     e_df['hours_current'] = e_df['hours_current'].apply(fmt_hours)
 
     # Leave Recalc (Unchanged)
