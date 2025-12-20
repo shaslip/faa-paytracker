@@ -449,7 +449,8 @@ with tab_audit:
                     )
                     bucket_rows.append(b)
                 
-                buckets = pd.DataFrame(bucket_rows, columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "OJTI", "CIC"])
+                cols = ["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "Leave_Hrs", "OJTI", "CIC"]
+                buckets = pd.DataFrame(bucket_rows, columns=cols)
                 
                 # Pay Engine Setup
                 ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
