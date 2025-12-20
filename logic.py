@@ -422,6 +422,9 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
     e_df = pd.DataFrame(rows, columns=['type', 'rate', 'hours_current', 'amount_current', 'amount_ytd'])
     e_df['hours_adjusted'] = 0.0; e_df['amount_adjusted'] = 0.0
 
+    # 3. Apply the formatter to the NEW column
+    e_df['hours_current'] = e_df['hours_current'].apply(fmt_hours)
+
     # --- Helper: Convert Decimal Hours to HH:MM String for Display ---
     def fmt_hours(val):
         if not val or val < 0.001: return ""
