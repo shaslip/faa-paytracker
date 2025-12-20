@@ -443,16 +443,16 @@ with tab_audit:
                     s_obj = pd.to_datetime(row['Start'], format='%H:%M').time() if row['Start'] else None
                     e_obj = pd.to_datetime(row['End'], format='%H:%M').time() if row['End'] else None
                     
+                    # Ensure 'b' is defined here as well
                     b = logic.calculate_daily_breakdown(
                         row['Date'], s_obj, e_obj, row['Leave_Type'], 
                         row['OJTI'], row['CIC'], std_sched
                     )
                     bucket_rows.append(b)
                 
-                cols = ["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "Leave_Hrs", "OJTI", "CIC"]
-                buckets = pd.DataFrame(bucket_rows, columns=cols)
+                # UPDATE THIS LINE to include Leave_Hrs
+                buckets = pd.DataFrame(bucket_rows, columns=["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "Leave_Hrs", "OJTI", "CIC"])
                 
-                # Pay Engine Setup
                 ref_rate, ref_ded, ref_earn = models.get_reference_data(sel_id)
                 
                 if act_data:
