@@ -507,6 +507,81 @@ with tab_audit:
                 """, unsafe_allow_html=True)
     else:
         st.warning("No data found. Please run an ingestion scan first to seed the database.")
+
+    st.divider()
+    
+    # ==========================
+    # Tax Prep: OT Deduction
+    # ==========================
+    st.header("🇺🇸 Tax Prep: Deductible Overtime (FLSA)")
+    st.markdown("""
+    **Instructions:** Enter this amount if your tax software asks for the *"half amount"* of your time-and-a-half overtime (The 0.5 premium portion).
+    """)
+
+    # 1. Select Tax Year
+    tax_year = st.selectbox("Select Tax Year", [current_year - 1, current_year], index=0, key="tax_year_select")
+
+    # 2. Fetch Earnings
+    df_earn_tax, _ = models.get_all_line_items()
+
+    if not df_earn_tax.empty:
+        # 3. Filter by Year
+        df_earn_tax['pay_date'] = pd.to_datetime(df_earn_tax['pay_date'])
+        df_tax = df_earn_tax[df_earn_tax['pay_date'].dt.year == tax_year].copy()
+
+        # 4. Calculate Deductible Portion
+        # Logic: 
+        # - If "Overtime" (1.5x) -> Divide by 3 to get the 0.5x premium.
+        # - If "FLSA Premium" (0.5x) -> Take 100% (it's already the premium).
+        # - If "Double" (2.0x) -> Divide by 4 (to get 0.5x premium), if applicable.
+        
+        def calculate_deductible(row):
+            t = row['type'].lower()
+            amt = row['amount_current']
+            
+            if "double" in t:
+                return amt / 4.0 # 2.0x -> 0.5x
+            elif "flsa" in t and "premium" in t:
+                return amt       # Already 0.5x
+            elif "overtime" in t:
+                return amt / 3.0 # 1.5x -> 0.5x
+            return 0.0
+
+        df_tax['Deductible_Amount'] = df_tax.apply(calculate_deductible, axis=1)
+        
+        # Filter down to only rows that generated a deduction
+        qualified_rows = df_tax[df_tax['Deductible_Amount'] > 0.01].copy()
+        
+        total_deduction = qualified_rows['Deductible_Amount'].sum()
+        total_gross_ot = qualified_rows['amount_current'].sum()
+
+        # 5. Display
+        m1, m2 = st.columns(2)
+        m1.metric(
+            label="Total Overtime Gross Paid",
+            value=f"${total_gross_ot:,.2f}",
+            help="The total cash amount you received for overtime lines."
+        )
+        m2.metric(
+            label="📉 Deductible Compensation",
+            value=f"${total_deduction:,.2f}",
+            delta="Enter this amount",
+            delta_color="normal",
+            help="This is the 'half' (premium) portion of your overtime."
+        )
+
+        with st.expander("Show Calculation Details"):
+            st.dataframe(
+                qualified_rows[['pay_date', 'type', 'amount_current', 'Deductible_Amount']].sort_values('pay_date'),
+                use_container_width=True,
+                column_config={
+                    "amount_current": st.column_config.NumberColumn("Gross Pay", format="$%.2f"),
+                    "Deductible_Amount": st.column_config.NumberColumn("Deductible (0.5x)", format="$%.2f")
+                }
+            )
+            st.caption("Note: 'Holiday Worked' is generally excluded as it is a premium shift, not FLSA overtime > 40hrs.")
+    else:
+        st.warning(f"No earnings data found for {tax_year}.")
     
 with tab_graphs:
     st.header("📊 Pay Statistics")
