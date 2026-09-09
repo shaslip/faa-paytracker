@@ -740,7 +740,12 @@ with tab_ytd:
                     if not filt_earn.empty:
                         min_pp = filt_earn['pay_period_num'].min()
                         max_pp = filt_earn['pay_period_num'].max()
-                        st.caption(f"Showing data from PP{int(min_pp):02d} to PP{int(max_pp):02d} of {selected_year}.")
+                        
+                        # Check if they are valid numbers (not NaN) before formatting
+                        if pd.notna(min_pp) and pd.notna(max_pp):
+                            st.caption(f"Showing data from PP{int(min_pp):02d} to PP{int(max_pp):02d} of {selected_year}.")
+                        else:
+                            st.caption(f"Showing data for {selected_year} (Pay Period numbers missing or not fully scanned).")
                         
                 elif mode == "🇺🇸 Tax Year (W-2 Math)":
                     filt_earn = df_earn[df_earn['pay_date'].dt.year == selected_year].copy()
