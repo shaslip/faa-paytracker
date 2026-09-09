@@ -783,7 +783,7 @@ with tab_ytd:
                     st.dataframe(
                         ytd_earn,
                         hide_index=True,
-                        use_container_width=True,
+                        width='stretch',
                         column_order=("type", "Hours", "Amount"),
                         column_config={
                             "type": "Earning Type",
@@ -801,7 +801,7 @@ with tab_ytd:
                     st.dataframe(
                         ytd_ded,
                         hide_index=True,
-                        use_container_width=True,
+                        width='stretch',
                         column_config={
                             "type": "Deduction Type",
                             "Amount": st.column_config.NumberColumn("Total Amount", format="$%.2f")
