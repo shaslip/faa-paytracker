@@ -20,8 +20,15 @@ def setup_database():
         total_deductions REAL,
         agency TEXT,
         remarks TEXT,
-        file_source TEXT
+        file_source TEXT,
+        pay_period_num INTEGER
     )''')
+
+    # SAFE MIGRATION
+    try:
+        c.execute("ALTER TABLE paystubs ADD COLUMN pay_period_num INTEGER")
+    except sqlite3.OperationalError:
+        pass
 
     # 2. Earnings
     c.execute('''CREATE TABLE IF NOT EXISTS earnings (
@@ -60,8 +67,7 @@ def setup_database():
         FOREIGN KEY(paystub_id) REFERENCES paystubs(id)
     )''')
 
-    # 5. NEW: Timesheet Entries (Persisted User Input)
-    # Linked by period_ending so we can audit 0.00 checks or projected checks
+    # 5. Timesheet Entries
     c.execute('''CREATE TABLE IF NOT EXISTS timesheet_entries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         period_ending TEXT,
@@ -103,9 +109,17 @@ def parse_html_paystub(html_content, filename, conn):
         raw_date = soup.find(id="lblPayPeriodDate").get_text().strip()
         pay_date = convert_date(raw_date)
 
+        # Extract Pay Period Number
+        pp_node = soup.find(id="lblPayPeriodNumber")
+        pay_period_num = int(pp_node.get_text().strip()) if pp_node else None
+
+        # Check if exists. If it does, UPDATE it to ensure we backfill the pay_period_num for old files
         c.execute("SELECT id FROM paystubs WHERE pay_date = ?", (pay_date,))
-        if c.fetchone():
-            print(f"Skipping {filename}: {pay_date} exists.")
+        existing = c.fetchone()
+        if existing:
+            c.execute("UPDATE paystubs SET pay_period_num = ? WHERE id = ?", (pay_period_num, existing[0]))
+            conn.commit()
+            print(f"Updated {filename}: Added PP {pay_period_num}.")
             return
 
         raw_period = soup.find(id="lblPayPeriodEndingDate").get_text().strip()
@@ -121,12 +135,12 @@ def parse_html_paystub(html_content, filename, conn):
         remarks_node = soup.find(id="lblRemarks")
         remarks = remarks_node.get_text("\n").strip() if remarks_node else ""
 
-        print(f"Importing {filename}: {pay_date} (Net: ${net_pay})")
+        print(f"Importing {filename}: {pay_date} (PP{pay_period_num})")
 
         c.execute('''INSERT INTO paystubs 
-                     (pay_date, period_ending, net_pay, gross_pay, total_deductions, agency, remarks, file_source)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                  (pay_date, period_ending, net_pay, gross_pay, total_deducs, agency, remarks, filename))
+                     (pay_date, period_ending, net_pay, gross_pay, total_deductions, agency, remarks, file_source, pay_period_num)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (pay_date, period_ending, net_pay, gross_pay, total_deducs, agency, remarks, filename, pay_period_num))
         
         paystub_id = c.lastrowid 
 
