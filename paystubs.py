@@ -14,108 +14,128 @@ TOTP_SECRET = os.getenv("LOGIN_GOV_TOTP_SECRET")
 # Configuration
 START_URL = "https://www.employeeexpress.gov/ELS"
 OUTPUT_DIR = "paystubs"
+PROFILE_DIR = "./playwright_profile"
 
 def login(page):
-    print("Navigating to Employee Express (will redirect to login.gov)...")
+    print("Navigating to Employee Express...")
     page.goto(START_URL)
+    time.sleep(2)
 
-    # Target the title attribute instead of inner text
+    # 1. Click Login.gov Button
     login_btn = page.locator('a[title="Sign in with Login.gov"]')
     if login_btn.is_visible():
         print("Found Login.gov button. Clicking...")
         login_btn.click()
+        time.sleep(3)
 
-    print("Waiting for Login.gov email field...")
-    page.wait_for_selector('input[type="email"]', timeout=15000)
-    
-    page.fill('input[type="email"]', EMAIL)
-    page.fill('input[type="password"]', PASSWORD)
-    page.click('button:has-text("Sign in"), button[type="submit"]')
-    
-    print("Credentials submitted. Waiting for 2FA screen...")
-    
-    # Wait for the TOTP input field
-    page.wait_for_selector('input[name="code"], input[id="code"]', timeout=15000)
-    
-    print("Generating TOTP code...")
-    totp = pyotp.TOTP(TOTP_SECRET)
-    current_code = totp.now()
-    
-    page.fill('input[name="code"], input[id="code"]', current_code)
-    page.click('button:has-text("Submit"), button[type="submit"]')
-    
-    print("2FA submitted. Waiting to return to Employee Express...")
-    
-    # Wait for the Earnings and Leave Statement dropdown to prove we made it
+    # 2. Enter Credentials
+    if page.locator('input[type="email"]').is_visible():
+        print("Entering email and password...")
+        page.fill('input[type="email"]', EMAIL)
+        page.fill('input[type="password"]', PASSWORD)
+        time.sleep(1)
+        page.click('button:has-text("Sign in"), button[type="submit"]')
+        time.sleep(3)
+
+    # 3. Enter 2FA
+    totp_input = page.locator('input[autocomplete="one-time-code"]')
+    if totp_input.is_visible():
+        print("Generating and submitting TOTP code...")
+        totp = pyotp.TOTP(TOTP_SECRET)
+        totp_input.fill(totp.now())
+        time.sleep(1)
+        page.click('button:has-text("Submit"), button[type="submit"]')
+        
+        # Wait for the post-login redirect to settle
+        page.wait_for_load_state('networkidle')
+        time.sleep(3)
+
+    # 4. Ensure we are actually on the ELS page
+    if "/Home" in page.url or "/ELS" not in page.url:
+        print("Redirected to Home page. Navigating to Paystubs (ELS)...")
+        page.goto(START_URL)
+        time.sleep(2)
+
+    # 5. Verify Success
     page.wait_for_selector('#ddlELS', timeout=30000)
-    print("Successfully reached the Paystubs (ELS) page.")
+    print("Successfully reached the Paystubs page.")
 
 def run():
-    # Ensure output directory exists
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR)
 
     with sync_playwright() as p:
-        # headless=False is helpful for the first run to ensure login.gov selectors haven't changed
-        browser = p.chromium.launch(headless=True) 
-        context = browser.new_context()
-        page = context.new_page()
-
-        login(page)
+        print("Launching Playwright...")
+        context = p.chromium.launch_persistent_context(
+            user_data_dir=PROFILE_DIR,
+            headless=True, # Runs invisibly in the background
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox"
+            ],
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        )
         
-        print("Finding available pay periods...")
-        
-        # Extract all options from the dropdown to a list of dictionaries
-        # We do this first because selecting an option reloads the page, which would make elements stale
-        options = page.locator('#ddlELS option')
-        pay_periods = []
-        for i in range(options.count()):
-            pay_periods.append({
-                "value": options.nth(i).get_attribute("value"),
-                "text": options.nth(i).inner_text()
-            })
-            
-        print(f"Found {len(pay_periods)} pay periods.")
+        page = context.pages[0] if context.pages else context.new_page()
 
-        for pp in pay_periods:
-            # Extract date from text (e.g., "08/22/2026 - Department of Transportation")
-            date_match = re.search(r'(\d{2}/\d{2}/\d{4})', pp['text'])
-            if not date_match:
-                continue
+        try:
+            login(page)
+            
+            print("Finding available pay periods...")
+            options = page.locator('#ddlELS option')
+            pay_periods = []
+            
+            # Extract dropdown options
+            for i in range(options.count()):
+                pay_periods.append({
+                    "value": options.nth(i).get_attribute("value"),
+                    "text": options.nth(i).inner_text()
+                })
                 
-            # Format date for a clean filename: YYYY-MM-DD
-            raw_date = date_match.group(1)
-            m, d, y = raw_date.split('/')
-            formatted_date = f"{y}-{m}-{d}"
-            
-            filename = os.path.join(OUTPUT_DIR, f"paystub_{formatted_date}.html")
-            
-            # Skip if we already downloaded it
-            if os.path.exists(filename):
-                print(f"Skipping {formatted_date} (Already exists)")
-                continue
+            print(f"Found {len(pay_periods)} pay periods.")
 
-            print(f"Downloading paystub for {formatted_date}...")
-            
-            # Select the option. ASP.NET uses __doPostBack which triggers a page reload.
-            try:
-                with page.expect_navigation(timeout=10000):
-                    page.select_option('#ddlELS', pp['value'])
-            except Exception:
-                # If it's an AJAX update instead of a full reload, expect_navigation will timeout.
-                # We catch the timeout and wait for network idle instead.
-                page.wait_for_load_state('networkidle')
-                time.sleep(1) # Brief pause to ensure DOM is fully rendered
-
-            # Save the entire HTML of the page
-            page_html = page.content()
-            with open(filename, 'w', encoding='utf-8') as f:
-                f.write(page_html)
+            for pp in pay_periods:
+                # Extract date: e.g., "08/22/2026 - Department of Transportation"
+                date_match = re.search(r'(\d{2}/\d{2}/\d{4})', pp['text'])
+                if not date_match:
+                    continue
+                    
+                raw_date = date_match.group(1)
+                m, d, y = raw_date.split('/')
+                formatted_date = f"{y}-{m}-{d}"
                 
-            print(f"Saved: {filename}")
+                filename = os.path.join(OUTPUT_DIR, f"{formatted_date}.html")
+                
+                # Skip if we already have it
+                if os.path.exists(filename):
+                    print(f"Skipping {formatted_date} (Already exists)")
+                    continue
 
-        print("All paystubs downloaded successfully.")
-        browser.close()
+                print(f"Downloading paystub for {formatted_date}...")
+                
+                # Select the dropdown option
+                try:
+                    with page.expect_navigation(timeout=10000):
+                        page.select_option('#ddlELS', pp['value'])
+                except Exception:
+                    # Fallback if it uses AJAX instead of a hard redirect
+                    page.wait_for_load_state('networkidle')
+                    time.sleep(2)
+
+                # Save the raw HTML
+                page_html = page.content()
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write(page_html)
+                    
+                print(f"Saved: {filename}")
+
+            print("All missing paystubs downloaded successfully.")
+            
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            
+        finally:
+            context.close()
 
 if __name__ == "__main__":
     run()
