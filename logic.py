@@ -40,8 +40,8 @@ def generate_shutdown_ledger(stubs_meta, ref_rate, ref_ded, ref_earn, std_sched_
             for _, row in ts_v2.iterrows():
                 s_raw = row['Start']
                 e_raw = row['End']
-                s_obj = pd.to_datetime(s_raw, format='%H:%M').time() if s_raw and s_raw != "None" else None
-                e_obj = pd.to_datetime(e_raw, format='%H:%M').time() if e_raw and e_raw != "None" else None
+                s_obj = pd.to_datetime(s_raw, format='%H:%M').time() if pd.notna(s_raw) and str(s_raw).strip() != "None" and str(s_raw).strip() != "" else None
+                e_obj = pd.to_datetime(e_raw, format='%H:%M').time() if pd.notna(e_raw) and str(e_raw).strip() != "None" and str(e_raw).strip() != "" else None
                 
                 # --- THIS LINE DEFINES 'b' ---
                 b = calculate_daily_breakdown(
