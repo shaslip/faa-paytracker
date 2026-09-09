@@ -13,7 +13,7 @@ TOTP_SECRET = os.getenv("LOGIN_GOV_TOTP_SECRET")
 
 # Configuration
 START_URL = "https://www.employeeexpress.gov/ELS"
-OUTPUT_DIR = "paystubs"
+OUTPUT_DIR = "PayStubs"
 PROFILE_DIR = "./playwright_profile"
 
 def login(page):
