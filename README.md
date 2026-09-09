@@ -91,6 +91,11 @@ Navigate to the **"Ingestion"** tab in the dashboard:
 * Graphs of various earnings, deductions, and effective overtime rates over time.
 * Calculates deductible FLSA overtime for tax preparation.
 
+### The "YTD in detail" Tab
+* Select a custom date range (defaults to the current year) to see cumulative totals.
+* View total aggregate hours and gross amounts for specific earnings (e.g., True Overtime hours, Holiday worked) that the official paystub leaves out.
+* View total aggregate amounts for all deductions over the selected timeframe.
+
 ### The "Basic Facts" Tab
 * Enter your standard schedule for the year.
 * Automatically calculates observed holidays based on your specific standard schedule and RDOs.
