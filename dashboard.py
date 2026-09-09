@@ -764,10 +764,11 @@ with tab_ytd:
                         ytd_earn,
                         hide_index=True,
                         use_container_width=True,
+                        column_order=("type", "Hours", "Amount"), # Forces Hours before Amount
                         column_config={
                             "type": "Earning Type",
-                            "Amount": st.column_config.NumberColumn("Total Amount", format="$%.2f"),
-                            "Hours": st.column_config.NumberColumn("Total Hours", format="%.2f")
+                            "Hours": st.column_config.NumberColumn("Total Hours", format="%.2f"),
+                            "Amount": st.column_config.NumberColumn("Total Amount", format="$%.2f")
                         }
                     )
                     st.metric("Total Gross Earnings (Selected Range)", f"${ytd_earn['Amount'].sum():,.2f}")
