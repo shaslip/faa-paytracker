@@ -33,6 +33,7 @@ Note: to get the LOGIN_GOV_TOTP_SECRET sign in to login.gov, find "Add authentic
 
 
 **3. (Optional) Install the Mobile App on your phone**
+
 Modify `DEFAULT_IP` in `mobile_app.py` to match `hostname -I` output from your console.
 
 Test:
