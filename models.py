@@ -13,15 +13,20 @@ def setup_database():
     """Initializes all tables including V2 timesheets and Schedule."""
     conn = get_db()
     
-    # 1. Master Paystubs (Existing)
+    # 1. Master Paystubs (Added pay_period_num)
     conn.execute('''CREATE TABLE IF NOT EXISTS paystubs (
         id INTEGER PRIMARY KEY AUTOINCREMENT, pay_date TEXT UNIQUE, period_ending TEXT,
-        net_pay REAL, gross_pay REAL, total_deductions REAL, agency TEXT, remarks TEXT, file_source TEXT
+        net_pay REAL, gross_pay REAL, total_deductions REAL, agency TEXT, remarks TEXT, file_source TEXT,
+        pay_period_num INTEGER
     )''')
     
+    # SAFE MIGRATION: Add the column to existing databases if it doesn't exist
+    try:
+        conn.execute("ALTER TABLE paystubs ADD COLUMN pay_period_num INTEGER")
+    except sqlite3.OperationalError:
+        pass # Column already exists, safe to ignore
+    
     # 2. Schedule (Year Aware)
-    # We now check if the table exists AND has the year column. 
-    # If it's a fresh install, this creates the new structure.
     conn.execute('''CREATE TABLE IF NOT EXISTS user_schedule (
         year INTEGER NOT NULL,
         day_of_week INTEGER NOT NULL, 
@@ -31,7 +36,6 @@ def setup_database():
         PRIMARY KEY (year, day_of_week)
     )''')
     
-    # Seed 2025 Schedule if completely empty
     if pd.read_sql("SELECT count(*) as c FROM user_schedule", conn).iloc[0]['c'] == 0:
         current_year = datetime.now().year
         for i in range(7):
@@ -241,9 +245,9 @@ def get_all_line_items():
     """Fetches all earnings and deductions history normalized by pay_date."""
     conn = get_db()
     
-    # Fetch Earnings
+    # Fetch Earnings (Added period_ending and pay_period_num)
     sql_earn = """
-        SELECT p.pay_date, e.type, e.amount_current, e.hours_current, e.rate 
+        SELECT p.pay_date, p.period_ending, p.pay_period_num, e.type, e.amount_current, e.hours_current, e.rate 
         FROM earnings e 
         JOIN paystubs p ON e.paystub_id = p.id 
         ORDER BY p.pay_date
@@ -252,7 +256,7 @@ def get_all_line_items():
     
     # Fetch Deductions
     sql_ded = """
-        SELECT p.pay_date, d.type, d.amount_current 
+        SELECT p.pay_date, p.period_ending, p.pay_period_num, d.type, d.amount_current 
         FROM deductions d 
         JOIN paystubs p ON d.paystub_id = p.id 
         ORDER BY p.pay_date
