@@ -728,25 +728,39 @@ with tab_ytd:
                     return float(parts[0]) + float(parts[1]) / 60.0
                 return float(val) if pd.notna(val) else 0.0
 
+            # Helper to calculate the true Payroll Year
+            def calc_payroll_year(row):
+                y = row['period_ending'].year
+                m = row['period_ending'].month
+                pp = row['pay_period_num']
+                
+                if pd.isna(pp): 
+                    return y
+                # If it's an early PP (1-4) but happens in December, it belongs to NEXT year
+                if pp < 5 and m == 12: 
+                    return y + 1
+                # If it's a late PP (25-27) but happens in January, it belongs to PREVIOUS year
+                if pp > 20 and m == 1: 
+                    return y - 1
+                return y
+
             # --- Earnings Filter ---
             if not df_earn.empty:
                 df_earn['pay_date'] = pd.to_datetime(df_earn['pay_date'])
                 df_earn['period_ending'] = pd.to_datetime(df_earn['period_ending'])
+                df_earn['payroll_year'] = df_earn.apply(calc_payroll_year, axis=1)
                 
                 if mode == "🏢 Payroll Year (Leave & Agency Hours)":
-                    filt_earn = df_earn[df_earn['period_ending'].dt.year == selected_year].copy()
+                    filt_earn = df_earn[df_earn['payroll_year'] == selected_year].copy()
                     
-                    # Optional: Find min/max PP for display context
                     if not filt_earn.empty:
                         min_pp = filt_earn['pay_period_num'].min()
                         max_pp = filt_earn['pay_period_num'].max()
-                        
-                        # Check if they are valid numbers (not NaN) before formatting
                         if pd.notna(min_pp) and pd.notna(max_pp):
                             st.caption(f"Showing data from PP{int(min_pp):02d} to PP{int(max_pp):02d} of {selected_year}.")
                         else:
-                            st.caption(f"Showing data for {selected_year} (Pay Period numbers missing or not fully scanned).")
-                        
+                            st.caption(f"Showing data for {selected_year} (Pay Period numbers missing).")
+
                 elif mode == "🇺🇸 Tax Year (W-2 Math)":
                     filt_earn = df_earn[df_earn['pay_date'].dt.year == selected_year].copy()
                     st.caption(f"Showing all paychecks where the official Pay Date fell in {selected_year}.")
@@ -765,9 +779,10 @@ with tab_ytd:
             if not df_ded.empty:
                 df_ded['pay_date'] = pd.to_datetime(df_ded['pay_date'])
                 df_ded['period_ending'] = pd.to_datetime(df_ded['period_ending'])
+                df_ded['payroll_year'] = df_ded.apply(calc_payroll_year, axis=1)
                 
                 if mode == "🏢 Payroll Year (Leave & Agency Hours)":
-                    filt_ded = df_ded[df_ded['period_ending'].dt.year == selected_year].copy()
+                    filt_ded = df_ded[df_ded['payroll_year'] == selected_year].copy()
                 elif mode == "🇺🇸 Tax Year (W-2 Math)":
                     filt_ded = df_ded[df_ded['pay_date'].dt.year == selected_year].copy()
                 else: # Custom
