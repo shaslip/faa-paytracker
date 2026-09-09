@@ -6,3 +6,6 @@ flet
 fastapi
 uvicorn
 watchdog
+playwright==1.42.0
+python-dotenv==1.0.1
+pyotp==2.9.0
