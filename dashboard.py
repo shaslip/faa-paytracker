@@ -700,6 +700,12 @@ with tab_ytd:
         horizontal=True
     )
     
+    # Explanatory Text based on selection
+    if mode == "🇺🇸 Tax Year (W-2 Math)":
+        st.info("💡 **Why use this?** The IRS calculates your taxes based strictly on the **Pay Date** (when the money is deposited), not the days you worked. In a normal year, this matches your Payroll Year. However, if calendar quirks cause 27 pay dates to fall within a single year, this view will show exactly what will appear on your W-2.")
+    elif mode == "🏢 Payroll Year (Leave & Agency Hours)":
+        st.info("💡 **Why use this?** Based on the **Pay Period Ending** date. This groups the official pay periods (PP01 to PP26) used by the agency to track leave accruals, use-or-lose limits, and annual overtime caps, regardless of when the money actually hits your bank account.")
+
     current_year = datetime.now().year
     
     # 2. Setup Filter Variables
@@ -713,7 +719,7 @@ with tab_ytd:
             start_date, end_date = date_range
     else:
         # For Payroll and Tax year, we just need the year integer
-        selected_year = st.selectbox("Select Year", [current_year - 1, current_year, current_year + 1], index=1)
+        selected_year = st.selectbox("Select Year", [current_year - 1, current_year, current_year + 1], index=1, key="ytd_year_select")
 
     # 3. Fetch & Filter Data
     if (mode == "📅 Custom Date Range" and start_date and end_date) or (mode != "📅 Custom Date Range"):
