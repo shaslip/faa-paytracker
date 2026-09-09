@@ -354,8 +354,8 @@ with tab_audit:
                 # C. Run Bucket Logic (Using the std_sched we fetched at the TOP)
                 bucket_rows = []
                 for _, row in temp_df.iterrows():
-                    s_obj = pd.to_datetime(row['Start'], format='%H:%M').time() if row['Start'] else None
-                    e_obj = pd.to_datetime(row['End'], format='%H:%M').time() if row['End'] else None
+                    s_obj = pd.to_datetime(row['Start'], format='%H:%M').time() if pd.notna(row['Start']) and str(row['Start']).strip() != "None" and str(row['Start']).strip() != "" else None
+                    e_obj = pd.to_datetime(row['End'], format='%H:%M').time() if pd.notna(row['End']) and str(row['End']).strip() != "None" and str(row['End']).strip() != "" else None
                     
                     b = logic.calculate_daily_breakdown(
                         row['Date'], s_obj, e_obj, row['Leave_Type'], 
@@ -440,8 +440,8 @@ with tab_audit:
                 
                 bucket_rows = []
                 for _, row in calc_df.iterrows():
-                    s_obj = pd.to_datetime(row['Start'], format='%H:%M').time() if row['Start'] else None
-                    e_obj = pd.to_datetime(row['End'], format='%H:%M').time() if row['End'] else None
+                    s_obj = pd.to_datetime(row['Start'], format='%H:%M').time() if pd.notna(row['Start']) and str(row['Start']).strip() != "None" and str(row['Start']).strip() != "" else None
+                    e_obj = pd.to_datetime(row['End'], format='%H:%M').time() if pd.notna(row['End']) and str(row['End']).strip() != "None" and str(row['End']).strip() != "" else None
                     
                     # Ensure 'b' is defined here as well
                     b = logic.calculate_daily_breakdown(
