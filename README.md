@@ -52,15 +52,30 @@ Ensure your project folder looks like this:
 
 ```text
 PayTracker/
-├── paystubs/          # <--- HTML paystubs are saved here
-├── .env               # Your credentials and 2FA secrets
-├── dashboard.py       # The visualization app
-├── ingest.py          # Parses HTML to the database
-├── paystubs.py        # Playwright script to download paystubs
-├── holidays.json      # Holiday reference dates
-├── mobile_app.py      # Logic for the android app
-├── payroll_audit.db   # (Created automatically, database for desktop)
-└── mobile_data.db     # (Created automatically, database for mobile app)
+├── Desktop Server & Dashboard
+│   ├── dashboard.py             # Main Streamlit visualization app
+│   ├── listener.py              # Local API server (Port 5000) for the mobile app
+│   ├── logic.py                 # Core math, payroll rules, and audit logic
+│   ├── models.py                # Database queries and table setup
+│   ├── views.py                 # UI rendering and HTML generation for the dashboard
+│   ├── style.css                # Custom styling for the Streamlit dashboard
+│   ├── ingest.py                # Parses downloaded HTML paystubs to the database
+│   ├── paystubs.py              # Playwright script to automate downloading paystubs
+│   └── requirements-server.txt  # Dependencies for the desktop dashboard/server
+│
+├── Mobile App (Flet)
+│   ├── mobile_app.py            # The Android/Mobile app UI and logic
+│   ├── version.json             # Used by the mobile app to check for OTA updates
+│   └── requirements.txt         # Dependencies strictly for building the mobile app
+│
+├── Configuration & Data
+│   ├── .env                     # Your credentials and 2FA secrets (Keep private!)
+│   ├── holidays.json            # Holiday reference dates
+│   └── PayStubs/                # Directory where HTML paystubs are saved
+│
+└── Auto-Generated (Not tracked in git)
+    ├── payroll_audit.db         # Desktop database
+    └── mobile_data.db           # Mobile app database
 ```
 
 ## How to Use
