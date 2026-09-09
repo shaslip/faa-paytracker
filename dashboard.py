@@ -719,7 +719,7 @@ with tab_ytd:
             start_date, end_date = date_range
     else:
         # For Payroll and Tax year, we just need the year integer
-        selected_year = st.selectbox("Select Year", [current_year - 1, current_year, current_year + 1], index=1, key="ytd_year_select")
+        selected_year = st.selectbox("Select Year", [current_year - 1, current_year, current_year + 1], index=1)
 
     # 3. Fetch & Filter Data
     if (mode == "📅 Custom Date Range" and start_date and end_date) or (mode != "📅 Custom Date Range"):
