@@ -27,11 +27,6 @@ Create a `.env` file in the root directory to enable automated downloads:
 LOGIN_GOV_EMAIL=your_email@example.com
 LOGIN_GOV_PASSWORD=your_password
 LOGIN_GOV_TOTP_SECRET=YOUR_AUTHENTICATOR_SECRET_KEY
-
-# WMT Scheduler
-FAA_EMAIL=your_email@faa.gov
-FAA_PASSWORD=your_password
-FAA_INITIALS=XX
 ```
 
 **3. For the Mobile App**
