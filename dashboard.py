@@ -699,15 +699,13 @@ with tab_ytd:
         ["🏢 Payroll Year (Leave & Agency Hours)", "🇺🇸 Tax Year (W-2 Math)", "📅 Custom Date Range"], 
         horizontal=True
     )
-    
+
     # Explanatory Text based on selection
     if mode == "🇺🇸 Tax Year (W-2 Math)":
         st.info("💡 **Why use this?** The IRS calculates your taxes based strictly on the **Pay Date** (when the money is deposited), not the days you worked. In a normal year, this matches your Payroll Year. However, if calendar quirks cause 27 pay dates to fall within a single year, this view will show exactly what will appear on your W-2.")
-    elif mode == "🏢 Payroll Year (Leave & Agency Hours)":
-        st.info("💡 **Why use this?** Based on the **Pay Period Ending** date. This groups the official pay periods (PP01 to PP26) used by the agency to track leave accruals, use-or-lose limits, and annual overtime caps, regardless of when the money actually hits your bank account.")
 
     current_year = datetime.now().year
-    
+
     # 2. Setup Filter Variables
     start_date = None
     end_date = None
