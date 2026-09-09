@@ -690,6 +690,39 @@ with tab_graphs:
             st.warning(f"No earnings data found for {tax_year}.")
 
 with tab_ingest:
-    if st.button("Scan PayStubs"):
-        os.system("python3 ingest.py")
-        st.success("Scan processed.")
+    st.header("📥 Data Ingestion")
+    
+    c1, c2 = st.columns(2)
+    
+    with c1:
+        st.subheader("1. Download Paystubs")
+        st.write("Automate login.gov to download missing paystubs.")
+        if st.button("Download New Paystubs"):
+            with st.spinner("Logging in to Employee Express... Please wait."):
+                # Use sys.executable to ensure it uses the same Python environment
+                result = subprocess.run([sys.executable, "paystubs.py"], capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    st.success("Download complete!")
+                    with st.expander("View Output Log"):
+                        st.text(result.stdout)
+                else:
+                    st.error("An error occurred during download.")
+                    with st.expander("View Error Log"):
+                        st.text(result.stderr)
+
+    with c2:
+        st.subheader("2. Parse HTML to Database")
+        st.write("Scan the downloaded files and update the tracker.")
+        if st.button("Scan PayStubs"):
+            with st.spinner("Parsing files..."):
+                result = subprocess.run([sys.executable, "ingest.py"], capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    st.success("Scan processed successfully.")
+                    # Optional: Show the ingest log
+                    # with st.expander("View Log"): st.text(result.stdout)
+                else:
+                    st.error("Error processing scan.")
+                    with st.expander("View Error Log"):
+                        st.text(result.stderr)
