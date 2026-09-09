@@ -4,7 +4,7 @@ A local Python-based dashboard to audit paystubs, detect payroll anomalies, and 
 
 ## Features
 
-* **Automated Data Fetching:** Securely downloads paystubs via Login.gov (handling TOTP 2FA automatically) and scrapes work schedules from wmtscheduler.
+* **Automated Data Fetching:** Securely downloads paystubs via Login.gov (handling TOTP 2FA automatically)
 * **Auditing:** Flags if leave balance math isn't correct, if new deduction codes appear, or if tax rates shift unexpectedly.
 * **Visual Replica:** Recreates the Employee Express paystub but highlights errors with explanatory tooltips.
 * **Government Shutdowns:** Includes a "Missed payments Ledger" to project missed paychecks during a shutdown and reconcile them against the eventual "Lump Sum" payout.
@@ -53,7 +53,6 @@ PayTracker/
 ├── dashboard.py       # The visualization app
 ├── ingest.py          # Parses HTML to the database
 ├── paystubs.py        # Playwright script to download paystubs
-├── scheduler.py       # Playwright script to download schedules
 ├── holidays.json      # Holiday reference dates
 ├── mobile_app.py      # Logic for the android app
 ├── payroll_audit.db   # (Created automatically, database for desktop)
