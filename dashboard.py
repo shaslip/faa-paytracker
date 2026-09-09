@@ -679,7 +679,7 @@ with tab_graphs:
             with st.expander("Show Calculation Details"):
                 st.dataframe(
                     qualified_rows[['pay_date', 'type', 'amount_current', 'Deductible_Amount']].sort_values('pay_date'),
-                    use_container_width=True,
+                    width='stretch',
                     column_config={
                         "amount_current": st.column_config.NumberColumn("Gross Pay", format="$%.2f"),
                         "Deductible_Amount": st.column_config.NumberColumn("Deductible (0.5x)", format="$%.2f")
