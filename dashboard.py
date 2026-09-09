@@ -60,109 +60,7 @@ st.set_page_config(page_title="FAA PayTracker", layout="wide")
 st.markdown(views.get_css(), unsafe_allow_html=True)
 models.setup_database()
 
-tab_audit, tab_graphs, tab_facts, tab_ingest = st.tabs(["🧐 Audit & Time", "📊 Statistics & Graphs", "ℹ️ Basic Facts", "📥 Ingestion"])
-
-# --- TAB: BASIC FACTS (Schedule & Holidays) ---
-with tab_facts:
-    st.header("My Standard Schedule")
-    
-    # 1. Year Selector
-    current_year = datetime.now().year
-    selected_year = st.selectbox("Select Year", [current_year - 1, current_year, current_year + 1], index=1)
-    
-    st.info(f"Editing Schedule for {selected_year}. Enter times as HH:MM (e.g. 07:00). Leave empty for RDOs.")
-    
-    # 2. Fetch Schedule for Selected Year
-    sched_df = models.get_user_schedule(selected_year)
-    
-    # [FIX] Create a copy for calculation BEFORE filtering columns for the UI
-    calc_sched = sched_df.set_index('day_of_week')
-
-    days_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
-    sched_df['Day'] = sched_df['day_of_week'].map(days_map)
-    # Ensure correct column order for editor
-    sched_df = sched_df[['Day', 'start_time', 'end_time', 'day_of_week']]
-    
-    # --- REGEX FIX: Allow Empty String (^$) OR Time Format ---
-    time_regex = r"^$|^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
-
-    edited_sched = st.data_editor(
-        sched_df,
-        hide_index=True,
-        width="stretch", 
-        column_config={
-            "day_of_week": None, 
-            "Day": st.column_config.TextColumn(disabled=True),
-            "start_time": st.column_config.TextColumn("Std Start", validate=time_regex),
-            "end_time": st.column_config.TextColumn("Std End", validate=time_regex)
-        },
-        disabled=["Day"],
-        key=f"sched_editor_{selected_year}"
-    )
-    
-    if st.button(f"💾 Save {selected_year} Schedule"):
-        models.save_user_schedule(edited_sched, selected_year)
-        st.success(f"Standard schedule for {selected_year} updated!")
-        st.rerun()
-
-    st.divider()
-    
-    # --- HOLIDAY TABLES ---
-    st.subheader(f"{selected_year} Holiday Schedule")
-    
-    holidays_list = load_holidays_from_file(selected_year)
-    
-    if holidays_list:
-        data_actual = []
-        data_mine = []
-
-        for name, actual_date in holidays_list:
-            # [FIX] Use logic.py sliding rule with the calc_sched we saved earlier
-            observed_date = logic.get_observed_holiday(actual_date, calc_sched)
-            is_adjusted = actual_date != observed_date
-            
-            # Format dates for display
-            act_str = actual_date.strftime("%Y-%m-%d")
-            act_day = actual_date.strftime("%A")
-            obs_str = observed_date.strftime("%Y-%m-%d")
-            obs_day = observed_date.strftime("%A")
-
-            data_actual.append({"Holiday": name, "Date": act_str, "Day": act_day})
-            data_mine.append({"Holiday": name, "Observed": obs_str, "Day": obs_day, "Adjusted": is_adjusted})
-
-        df_actual = pd.DataFrame(data_actual)
-        df_mine = pd.DataFrame(data_mine)
-
-        # Columns for side-by-side layout
-        h_col1, h_col2 = st.columns(2)
-        
-        # FIX: Calculate exact height to remove scrollbar (Rows + Header * 36px)
-        t_height = (len(df_actual) + 1) * 36
-
-        with h_col1:
-            st.caption("**Actual Calendar**")
-            st.dataframe(
-                df_actual, 
-                hide_index=True, 
-                width='stretch',
-                height=t_height
-            )
-            
-        with h_col2:
-            st.caption("**Mine (Observed)**")
-            # Apply highlighting to 'Mine' table where date is adjusted
-            def highlight_adj(row):
-                return ['background-color: #ffcc00; color: black' if row['Adjusted'] else '' for _ in row]
-            
-            st.dataframe(
-                df_mine.style.apply(highlight_adj, axis=1), 
-                hide_index=True, 
-                width='stretch',
-                column_config={"Adjusted": None}, # Hide the boolean helper column
-                height=t_height
-            )
-    else:
-        st.error(f"No holiday data found for {selected_year} in holidays.json")
+tab_audit, tab_graphs, tab_ytd, tab_facts, tab_ingest = st.tabs(["🧐 Audit & Time", "📊 Statistics & Graphs", "📅 YTD in detail", "ℹ️ Basic Facts", "📥 Ingestion"])
 
 # --- TAB: AUDIT ---
 with tab_audit:
@@ -507,7 +405,109 @@ with tab_audit:
                 """, unsafe_allow_html=True)
     else:
         st.warning("No data found. Please run an ingestion scan first to seed the database.")
+
+# --- TAB: BASIC FACTS (Schedule & Holidays) ---
+with tab_facts:
+    st.header("My Standard Schedule")
     
+    # 1. Year Selector
+    current_year = datetime.now().year
+    selected_year = st.selectbox("Select Year", [current_year - 1, current_year, current_year + 1], index=1)
+    
+    st.info(f"Editing Schedule for {selected_year}. Enter times as HH:MM (e.g. 07:00). Leave empty for RDOs.")
+    
+    # 2. Fetch Schedule for Selected Year
+    sched_df = models.get_user_schedule(selected_year)
+    
+    # [FIX] Create a copy for calculation BEFORE filtering columns for the UI
+    calc_sched = sched_df.set_index('day_of_week')
+
+    days_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
+    sched_df['Day'] = sched_df['day_of_week'].map(days_map)
+    # Ensure correct column order for editor
+    sched_df = sched_df[['Day', 'start_time', 'end_time', 'day_of_week']]
+    
+    # --- REGEX FIX: Allow Empty String (^$) OR Time Format ---
+    time_regex = r"^$|^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
+
+    edited_sched = st.data_editor(
+        sched_df,
+        hide_index=True,
+        width="stretch", 
+        column_config={
+            "day_of_week": None, 
+            "Day": st.column_config.TextColumn(disabled=True),
+            "start_time": st.column_config.TextColumn("Std Start", validate=time_regex),
+            "end_time": st.column_config.TextColumn("Std End", validate=time_regex)
+        },
+        disabled=["Day"],
+        key=f"sched_editor_{selected_year}"
+    )
+    
+    if st.button(f"💾 Save {selected_year} Schedule"):
+        models.save_user_schedule(edited_sched, selected_year)
+        st.success(f"Standard schedule for {selected_year} updated!")
+        st.rerun()
+
+    st.divider()
+    
+    # --- HOLIDAY TABLES ---
+    st.subheader(f"{selected_year} Holiday Schedule")
+    
+    holidays_list = load_holidays_from_file(selected_year)
+    
+    if holidays_list:
+        data_actual = []
+        data_mine = []
+
+        for name, actual_date in holidays_list:
+            # [FIX] Use logic.py sliding rule with the calc_sched we saved earlier
+            observed_date = logic.get_observed_holiday(actual_date, calc_sched)
+            is_adjusted = actual_date != observed_date
+            
+            # Format dates for display
+            act_str = actual_date.strftime("%Y-%m-%d")
+            act_day = actual_date.strftime("%A")
+            obs_str = observed_date.strftime("%Y-%m-%d")
+            obs_day = observed_date.strftime("%A")
+
+            data_actual.append({"Holiday": name, "Date": act_str, "Day": act_day})
+            data_mine.append({"Holiday": name, "Observed": obs_str, "Day": obs_day, "Adjusted": is_adjusted})
+
+        df_actual = pd.DataFrame(data_actual)
+        df_mine = pd.DataFrame(data_mine)
+
+        # Columns for side-by-side layout
+        h_col1, h_col2 = st.columns(2)
+        
+        # FIX: Calculate exact height to remove scrollbar (Rows + Header * 36px)
+        t_height = (len(df_actual) + 1) * 36
+
+        with h_col1:
+            st.caption("**Actual Calendar**")
+            st.dataframe(
+                df_actual, 
+                hide_index=True, 
+                width='stretch',
+                height=t_height
+            )
+            
+        with h_col2:
+            st.caption("**Mine (Observed)**")
+            # Apply highlighting to 'Mine' table where date is adjusted
+            def highlight_adj(row):
+                return ['background-color: #ffcc00; color: black' if row['Adjusted'] else '' for _ in row]
+            
+            st.dataframe(
+                df_mine.style.apply(highlight_adj, axis=1), 
+                hide_index=True, 
+                width='stretch',
+                column_config={"Adjusted": None}, # Hide the boolean helper column
+                height=t_height
+            )
+    else:
+        st.error(f"No holiday data found for {selected_year} in holidays.json")
+
 with tab_graphs:
     st.header("📊 Pay Statistics")
     
@@ -688,6 +688,111 @@ with tab_graphs:
                 st.caption("Note: 'Holiday Worked' is generally excluded as it is a premium shift, not FLSA overtime > 40hrs.")
         else:
             st.warning(f"No earnings data found for {tax_year}.")
+
+# --- TAB: YTD IN DETAIL ---
+with tab_ytd:
+    st.header("📅 Year-to-Date & Custom Range Totals")
+    st.write("View cumulative hours and amounts for specific earnings and deductions over a selected time period.")
+
+    # 1. Date Range Selector (Defaults to current year)
+    current_year = datetime.now().year
+    start_of_year = date(current_year, 1, 1)
+    today = date.today()
+
+    date_range = st.date_input(
+        "Select Date Range",
+        value=(start_of_year, today),
+        max_value=today
+    )
+
+    # Ensure the user has selected both a start and end date before processing
+    if len(date_range) == 2:
+        start_date, end_date = date_range
+
+        # 2. Fetch Data
+        df_earn, df_ded = models.get_all_line_items()
+
+        if not df_earn.empty or not df_ded.empty:
+            # Helper to convert "HH:MM" string hours to float for accurate summing
+            def parse_hours(val):
+                if isinstance(val, str) and ":" in val:
+                    parts = val.split(":")
+                    return float(parts[0]) + float(parts[1]) / 60.0
+                return float(val) if pd.notna(val) else 0.0
+
+            # 3. Filter and Process Earnings
+            if not df_earn.empty:
+                df_earn['pay_date'] = pd.to_datetime(df_earn['pay_date']).dt.date
+                mask_earn = (df_earn['pay_date'] >= start_date) & (df_earn['pay_date'] <= end_date)
+                filt_earn = df_earn[mask_earn].copy()
+
+                filt_earn['hours_float'] = filt_earn['hours_current'].apply(parse_hours)
+
+                # Group by Type to get totals
+                ytd_earn = filt_earn.groupby('type').agg(
+                    Amount=('amount_current', 'sum'),
+                    Hours=('hours_float', 'sum')
+                ).reset_index()
+                
+                # Sort by highest amount
+                ytd_earn = ytd_earn.sort_values(by='Amount', ascending=False)
+            else:
+                ytd_earn = pd.DataFrame()
+
+            # 4. Filter and Process Deductions
+            if not df_ded.empty:
+                df_ded['pay_date'] = pd.to_datetime(df_ded['pay_date']).dt.date
+                mask_ded = (df_ded['pay_date'] >= start_date) & (df_ded['pay_date'] <= end_date)
+                filt_ded = df_ded[mask_ded].copy()
+
+                # Group by Type to get totals
+                ytd_ded = filt_ded.groupby('type').agg(
+                    Amount=('amount_current', 'sum')
+                ).reset_index()
+                
+                ytd_ded = ytd_ded.sort_values(by='Amount', ascending=False)
+            else:
+                ytd_ded = pd.DataFrame()
+
+            # 5. Display Data in Columns
+            c1, c2 = st.columns(2)
+
+            with c1:
+                st.subheader("🟢 Earnings Totals")
+                if not ytd_earn.empty:
+                    st.dataframe(
+                        ytd_earn,
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={
+                            "type": "Earning Type",
+                            "Amount": st.column_config.NumberColumn("Total Amount", format="$%.2f"),
+                            "Hours": st.column_config.NumberColumn("Total Hours", format="%.2f")
+                        }
+                    )
+                    st.metric("Total Gross Earnings (Selected Range)", f"${ytd_earn['Amount'].sum():,.2f}")
+                else:
+                    st.info("No earnings found in this date range.")
+
+            with c2:
+                st.subheader("🔴 Deduction Totals")
+                if not ytd_ded.empty:
+                    st.dataframe(
+                        ytd_ded,
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={
+                            "type": "Deduction Type",
+                            "Amount": st.column_config.NumberColumn("Total Amount", format="$%.2f")
+                        }
+                    )
+                    st.metric("Total Deductions (Selected Range)", f"${ytd_ded['Amount'].sum():,.2f}")
+                else:
+                    st.info("No deductions found in this date range.")
+        else:
+            st.warning("No data found in the database. Please ingest paystubs first.")
+    else:
+        st.info("Please select both a start and end date.")
 
 with tab_ingest:
     st.header("📥 Data Ingestion")
