@@ -46,9 +46,7 @@ flet build apk --project "Audit FAA" --module-name mobile_app
 ```
 Look for `app-release.apk` located in `/build/apk` and transfer that to your phone, then install it.
 
-## Folder Structure
-
-Ensure your project folder looks like this:
+## Files and Descriptions
 
 ```text
 PayTracker/
