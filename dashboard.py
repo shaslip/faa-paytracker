@@ -697,31 +697,64 @@ with tab_ingest:
     with c1:
         st.subheader("1. Download Paystubs")
         st.write("Automate login.gov to download missing paystubs.")
+        
         if st.button("Download New Paystubs"):
-            with st.spinner("Logging in to Employee Express... Please wait."):
-                # Use sys.executable to ensure it uses the same Python environment
-                result = subprocess.run([sys.executable, "paystubs.py"], capture_output=True, text=True)
+            # st.status creates a nice animated box that we can update on the fly
+            with st.status("Initializing browser...", expanded=True) as status:
+                log_container = st.empty()
+                log_text = ""
                 
-                if result.returncode == 0:
-                    st.success("Download complete!")
-                    with st.expander("View Output Log"):
-                        st.text(result.stdout)
+                # Use Popen to run it in the background, and "-u" to force unbuffered output (real-time)
+                process = subprocess.Popen(
+                    [sys.executable, "-u", "paystubs.py"], 
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.STDOUT, 
+                    text=True
+                )
+                
+                # Read the output line by line as it is generated
+                for line in iter(process.stdout.readline, ''):
+                    clean_line = line.strip()
+                    if not clean_line:
+                        continue
+                        
+                    # Append to our raw log view
+                    log_text += clean_line + "\n"
+                    log_container.text(log_text)
+                    
+                    # Update the Streamlit status message based on the script's output
+                    if "Navigating to Employee" in clean_line:
+                        status.update(label="Connecting to Employee Express...")
+                    elif "Entering email" in clean_line:
+                        status.update(label="Logging in... Entering username/password")
+                    elif "Generating and submitting TOTP" in clean_line:
+                        status.update(label="Logging in... Entering OTP (2FA)")
+                    elif "Redirected to Home page" in clean_line:
+                        status.update(label="Logged in! Navigating to Paystubs...")
+                    elif "Finding available pay periods" in clean_line:
+                        status.update(label="Scanning for missing paystubs...")
+                    elif "Downloading paystub" in clean_line:
+                        status.update(label=clean_line) # Shows "Downloading paystub for 2024-01-13..."
+                        
+                process.stdout.close()
+                return_code = process.wait()
+                
+                if return_code == 0:
+                    status.update(label="Download complete!", state="complete", expanded=False)
+                    st.success("All missing paystubs downloaded successfully.")
                 else:
-                    st.error("An error occurred during download.")
-                    with st.expander("View Error Log"):
-                        st.text(result.stderr)
+                    status.update(label="An error occurred during download.", state="error", expanded=True)
 
     with c2:
         st.subheader("2. Parse HTML to Database")
         st.write("Scan the downloaded files and update the tracker.")
+        
         if st.button("Scan PayStubs"):
             with st.spinner("Parsing files..."):
                 result = subprocess.run([sys.executable, "ingest.py"], capture_output=True, text=True)
                 
                 if result.returncode == 0:
                     st.success("Scan processed successfully.")
-                    # Optional: Show the ingest log
-                    # with st.expander("View Log"): st.text(result.stdout)
                 else:
                     st.error("Error processing scan.")
                     with st.expander("View Error Log"):
