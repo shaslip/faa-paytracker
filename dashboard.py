@@ -412,7 +412,7 @@ with tab_facts:
     
     # 1. Year Selector
     current_year = datetime.now().year
-    selected_year = st.selectbox("Select Year", [current_year - 1, current_year, current_year + 1], index=1)
+    selected_year = st.selectbox("Select Year", [current_year - 1, current_year, current_year + 1], index=1, key="ytd_year_select")
     
     st.info(f"Editing Schedule for {selected_year}. Enter times as HH:MM (e.g. 07:00). Leave empty for RDOs.")
     
