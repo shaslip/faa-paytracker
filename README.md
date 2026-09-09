@@ -29,6 +29,9 @@ LOGIN_GOV_PASSWORD=your_password
 LOGIN_GOV_TOTP_SECRET=YOUR_AUTHENTICATOR_SECRET_KEY
 ```
 
+Note: to get the LOGIN_GOV_TOTP_SECRET sign in to login.gov, find "Add authentication apps" in the left menu, then copy the long string of text below the QR code. If instead you see a page called "Your authentication methods" you already have two "Authentication apps" set-up and you'd need to delete one of them and click "Add authentication apps" again. 
+
+
 **3. For the Mobile App**
 Modify `DEFAULT_IP` in `mobile_app.py` to match `hostname -I` output from your console.
 
