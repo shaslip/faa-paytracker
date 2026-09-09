@@ -77,7 +77,7 @@ Navigate to the **"Ingestion"** tab in the dashboard:
 1. Click **"Download New Paystubs"** to automatically log in to Employee Express and download any missing paystubs.
 2. Click **"Scan PayStubs"** to parse the newly downloaded files and update the tracker database.
 
-*(Note: You can still manually save raw HTML files in the format `YYYY-MM-DD.html` into the `paystubs/` folder if you prefer).*
+*(Note: You can manually save raw HTML files in the format `YYYY-MM-DD.html` into the `PayStubs/` folder if you prefer).*
 
 ## The Workflow
 
