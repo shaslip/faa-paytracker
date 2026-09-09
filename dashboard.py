@@ -692,69 +692,89 @@ with tab_graphs:
 # --- TAB: YTD IN DETAIL ---
 with tab_ytd:
     st.header("📅 Year-to-Date & Custom Range Totals")
-    st.write("View cumulative hours and amounts for specific earnings and deductions over a selected time period.")
-
-    # 1. Date Range Selector (Defaults to current year)
-    current_year = datetime.now().year
-    start_of_year = date(current_year, 1, 1)
-    today = date.today()
-
-    date_range = st.date_input(
-        "Select Date Range",
-        value=(start_of_year, today),
-        max_value=today
+    
+    # 1. Mode Selector
+    mode = st.radio(
+        "Select View Mode:", 
+        ["🏢 Payroll Year (Leave & Agency Hours)", "🇺🇸 Tax Year (W-2 Math)", "📅 Custom Date Range"], 
+        horizontal=True
     )
+    
+    current_year = datetime.now().year
+    
+    # 2. Setup Filter Variables
+    start_date = None
+    end_date = None
+    selected_year = current_year
+    
+    if mode == "📅 Custom Date Range":
+        date_range = st.date_input("Select Date Range", value=(date(current_year, 1, 1), date.today()), max_value=date.today())
+        if len(date_range) == 2:
+            start_date, end_date = date_range
+    else:
+        # For Payroll and Tax year, we just need the year integer
+        selected_year = st.selectbox("Select Year", [current_year - 1, current_year, current_year + 1], index=1)
 
-    # Ensure the user has selected both a start and end date before processing
-    if len(date_range) == 2:
-        start_date, end_date = date_range
-
-        # 2. Fetch Data
+    # 3. Fetch & Filter Data
+    if (mode == "📅 Custom Date Range" and start_date and end_date) or (mode != "📅 Custom Date Range"):
         df_earn, df_ded = models.get_all_line_items()
 
         if not df_earn.empty or not df_ded.empty:
-            # Helper to convert "HH:MM" string hours to float for accurate summing
+            
+            # Helper to convert "HH:MM" string hours to float
             def parse_hours(val):
                 if isinstance(val, str) and ":" in val:
                     parts = val.split(":")
                     return float(parts[0]) + float(parts[1]) / 60.0
                 return float(val) if pd.notna(val) else 0.0
 
-            # 3. Filter and Process Earnings
+            # --- Earnings Filter ---
             if not df_earn.empty:
-                df_earn['pay_date'] = pd.to_datetime(df_earn['pay_date']).dt.date
-                mask_earn = (df_earn['pay_date'] >= start_date) & (df_earn['pay_date'] <= end_date)
-                filt_earn = df_earn[mask_earn].copy()
+                df_earn['pay_date'] = pd.to_datetime(df_earn['pay_date'])
+                df_earn['period_ending'] = pd.to_datetime(df_earn['period_ending'])
+                
+                if mode == "🏢 Payroll Year (Leave & Agency Hours)":
+                    filt_earn = df_earn[df_earn['period_ending'].dt.year == selected_year].copy()
+                    
+                    # Optional: Find min/max PP for display context
+                    if not filt_earn.empty:
+                        min_pp = filt_earn['pay_period_num'].min()
+                        max_pp = filt_earn['pay_period_num'].max()
+                        st.caption(f"Showing data from PP{int(min_pp):02d} to PP{int(max_pp):02d} of {selected_year}.")
+                        
+                elif mode == "🇺🇸 Tax Year (W-2 Math)":
+                    filt_earn = df_earn[df_earn['pay_date'].dt.year == selected_year].copy()
+                    st.caption(f"Showing all paychecks where the official Pay Date fell in {selected_year}.")
+                    
+                else: # Custom
+                    mask_earn = (df_earn['pay_date'].dt.date >= start_date) & (df_earn['pay_date'].dt.date <= end_date)
+                    filt_earn = df_earn[mask_earn].copy()
 
                 filt_earn['hours_float'] = filt_earn['hours_current'].apply(parse_hours)
-
-                # Group by Type to get totals
-                ytd_earn = filt_earn.groupby('type').agg(
-                    Amount=('amount_current', 'sum'),
-                    Hours=('hours_float', 'sum')
-                ).reset_index()
-                
-                # Sort by highest amount
+                ytd_earn = filt_earn.groupby('type').agg(Amount=('amount_current', 'sum'), Hours=('hours_float', 'sum')).reset_index()
                 ytd_earn = ytd_earn.sort_values(by='Amount', ascending=False)
             else:
                 ytd_earn = pd.DataFrame()
 
-            # 4. Filter and Process Deductions
+            # --- Deductions Filter ---
             if not df_ded.empty:
-                df_ded['pay_date'] = pd.to_datetime(df_ded['pay_date']).dt.date
-                mask_ded = (df_ded['pay_date'] >= start_date) & (df_ded['pay_date'] <= end_date)
-                filt_ded = df_ded[mask_ded].copy()
-
-                # Group by Type to get totals
-                ytd_ded = filt_ded.groupby('type').agg(
-                    Amount=('amount_current', 'sum')
-                ).reset_index()
+                df_ded['pay_date'] = pd.to_datetime(df_ded['pay_date'])
+                df_ded['period_ending'] = pd.to_datetime(df_ded['period_ending'])
                 
+                if mode == "🏢 Payroll Year (Leave & Agency Hours)":
+                    filt_ded = df_ded[df_ded['period_ending'].dt.year == selected_year].copy()
+                elif mode == "🇺🇸 Tax Year (W-2 Math)":
+                    filt_ded = df_ded[df_ded['pay_date'].dt.year == selected_year].copy()
+                else: # Custom
+                    mask_ded = (df_ded['pay_date'].dt.date >= start_date) & (df_ded['pay_date'].dt.date <= end_date)
+                    filt_ded = df_ded[mask_ded].copy()
+
+                ytd_ded = filt_ded.groupby('type').agg(Amount=('amount_current', 'sum')).reset_index()
                 ytd_ded = ytd_ded.sort_values(by='Amount', ascending=False)
             else:
                 ytd_ded = pd.DataFrame()
 
-            # 5. Display Data in Columns
+            # 4. Display Data
             c1, c2 = st.columns(2)
 
             with c1:
@@ -763,17 +783,17 @@ with tab_ytd:
                     st.dataframe(
                         ytd_earn,
                         hide_index=True,
-                        width='stretch',
-                        column_order=("type", "Hours", "Amount"), # Forces Hours before Amount
+                        use_container_width=True,
+                        column_order=("type", "Hours", "Amount"),
                         column_config={
                             "type": "Earning Type",
                             "Hours": st.column_config.NumberColumn("Total Hours", format="%.2f"),
                             "Amount": st.column_config.NumberColumn("Total Amount", format="$%.2f")
                         }
                     )
-                    st.metric("Total Gross Earnings (Selected Range)", f"${ytd_earn['Amount'].sum():,.2f}")
+                    st.metric("Total Gross Earnings", f"${ytd_earn['Amount'].sum():,.2f}")
                 else:
-                    st.info("No earnings found in this date range.")
+                    st.info("No earnings found for this selection.")
 
             with c2:
                 st.subheader("🔴 Deduction Totals")
@@ -781,20 +801,19 @@ with tab_ytd:
                     st.dataframe(
                         ytd_ded,
                         hide_index=True,
-                        width='stretch',
+                        use_container_width=True,
                         column_config={
                             "type": "Deduction Type",
                             "Amount": st.column_config.NumberColumn("Total Amount", format="$%.2f")
                         }
                     )
-                    st.metric("Total Deductions (Selected Range)", f"${ytd_ded['Amount'].sum():,.2f}")
+                    st.metric("Total Deductions", f"${ytd_ded['Amount'].sum():,.2f}")
                 else:
-                    st.info("No deductions found in this date range.")
+                    st.info("No deductions found for this selection.")
         else:
             st.warning("No data found in the database. Please ingest paystubs first.")
-    else:
-        st.info("Please select both a start and end date.")
 
+# --- TAB: INGEST ---
 with tab_ingest:
     st.header("📥 Data Ingestion")
     
