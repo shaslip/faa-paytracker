@@ -19,10 +19,11 @@ def login(page):
     print("Navigating to Employee Express (will redirect to login.gov)...")
     page.goto(START_URL)
 
-    # Note: Depending on session state, you might land on an Employee Express 
-    # login portal first. If there's a specific "Login.gov" button, click it.
-    if page.locator('text="Sign in with Login.gov"').is_visible():
-        page.click('text="Sign in with Login.gov"')
+    # Target the title attribute instead of inner text
+    login_btn = page.locator('a[title="Sign in with Login.gov"]')
+    if login_btn.is_visible():
+        print("Found Login.gov button. Clicking...")
+        login_btn.click()
 
     print("Waiting for Login.gov email field...")
     page.wait_for_selector('input[type="email"]', timeout=15000)
@@ -34,7 +35,6 @@ def login(page):
     print("Credentials submitted. Waiting for 2FA screen...")
     
     # Wait for the TOTP input field
-    # Login.gov usually uses name="code" for the authenticator input
     page.wait_for_selector('input[name="code"], input[id="code"]', timeout=15000)
     
     print("Generating TOTP code...")
