@@ -116,6 +116,10 @@ def run():
                 # Select the dropdown option
                 page.select_option('#ddlELS', pp['value'])
                 
+                # If this is the very first item (default selection), give the initial page load time to settle
+                if pp == pay_periods[0]:
+                    time.sleep(6)
+                
                 # Wait explicitly for the AJAX request to finish by checking the date label
                 try:
                     page.locator(f"#lblPayPeriodEndingDate:has-text('{raw_date}')").wait_for(state="visible", timeout=15000)
