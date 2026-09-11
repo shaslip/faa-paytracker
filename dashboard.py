@@ -848,10 +848,10 @@ with tab_ingest:
         st.write("Automate login.gov to download missing paystubs.")
         
         if st.button("Download New Paystubs"):
+            log_text = ""
             # st.status creates a nice animated box that we can update on the fly
             with st.status("Initializing browser...", expanded=True) as status:
                 log_container = st.empty()
-                log_text = ""
                 
                 # Use Popen to run it in the background, and "-u" to force unbuffered output (real-time)
                 process = subprocess.Popen(
@@ -892,7 +892,10 @@ with tab_ingest:
                     status.update(label="Download complete!", state="complete", expanded=False)
                     st.success("All missing paystubs downloaded successfully.")
                 else:
-                    status.update(label="An error occurred during download.", state="error", expanded=True)
+                    status.update(label="An error occurred during download.", state="error", expanded=False)
+            
+            with st.expander("View Download Log", expanded=False):
+                st.text(log_text if log_text.strip() else "No output generated.")
 
     with c2:
         st.subheader("2. Parse HTML to Database")
@@ -906,5 +909,10 @@ with tab_ingest:
                     st.success("Scan processed successfully.")
                 else:
                     st.error("Error processing scan.")
-                    with st.expander("View Error Log"):
-                        st.text(result.stderr)
+                
+                full_log = result.stdout
+                if result.stderr:
+                    full_log += "\n" + result.stderr
+                    
+                with st.expander("View Scan Log", expanded=False):
+                    st.text(full_log if full_log.strip() else "No output generated.")
