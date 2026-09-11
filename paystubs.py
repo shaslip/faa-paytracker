@@ -116,9 +116,18 @@ def run():
                 # Select the dropdown option
                 page.select_option('#ddlELS', pp['value'])
                 
-                # If this is the very first item (default selection), give the initial page load time to settle
-                if pp == pay_periods[0]:
-                    time.sleep(6)
+                # Wait explicitly for the AJAX request and data to finish rendering
+                try:
+                    # 1. Wait for the date to update (handles iterations 2 through N)
+                    page.locator(f"#lblPayPeriodEndingDate:has-text('{raw_date}')").wait_for(state="visible", timeout=15000)
+                    
+                    # 2. Wait for the table data to actually populate (handles the 1st iteration)
+                    page.locator("text=Service Comp Date").wait_for(state="visible", timeout=15000)
+                    
+                    time.sleep(1) # Extra second buffer for the rest of the DOM to settle
+                except Exception:
+                    print(f"  -> Warning: Timeout waiting for {raw_date} to render.")
+                    time.sleep(3)
                 
                 # Wait explicitly for the AJAX request to finish by checking the date label
                 try:
