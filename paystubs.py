@@ -68,7 +68,7 @@ def run():
         print("Launching Playwright...")
         context = p.chromium.launch_persistent_context(
             user_data_dir=PROFILE_DIR,
-            headless=True, # Runs invisibly in the background
+            headless=False, # Runs invisibly in the background
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox"
@@ -147,6 +147,7 @@ def run():
                     time.sleep(6)
 
                 # Save the raw HTML
+                page.screenshot(path=f"{filename}.png")
                 page_html = page.content()
                 with open(filename, 'w', encoding='utf-8') as f:
                     f.write(page_html)
