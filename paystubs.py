@@ -94,15 +94,6 @@ def run():
                 
             print(f"Found {len(pay_periods)} pay periods.")
 
-            # --- ASP.NET Workaround: Toggle dropdown to force data load ---
-            if len(pay_periods) > 1:
-                print("Toggling dropdown to force initial data load...")
-                page.select_option('#ddlELS', pay_periods[1]['value'])
-                time.sleep(3)
-                page.select_option('#ddlELS', pay_periods[0]['value'])
-                time.sleep(3)
-            # --------------------------------------------------------------
-
             for pp in pay_periods:
                 # Extract date: e.g., "08/22/2026 - Department of Transportation"
                 date_match = re.search(r'(\d{2}/\d{2}/\d{4})', pp['text'])
@@ -122,32 +113,27 @@ def run():
 
                 print(f"Downloading paystub for {formatted_date}...")
                 
-                # Select the dropdown option
-                page.select_option('#ddlELS', pp['value'])
-                
-                # Wait explicitly for the AJAX request and data to finish rendering
-                try:
-                    # 1. Wait for the date to update (handles iterations 2 through N)
-                    page.locator(f"#lblPayPeriodEndingDate:has-text('{raw_date}')").wait_for(state="visible", timeout=15000)
+                # Check what is currently selected
+                current_selection = page.locator('#ddlELS').input_value()
+
+                if current_selection != pp['value']:
+                    # Select the dropdown option
+                    page.select_option('#ddlELS', pp['value'])
                     
-                    # 2. Wait for the table data to actually populate (handles the 1st iteration)
-                    page.locator("text=Service Comp Date").wait_for(state="visible", timeout=15000)
-                    
-                    time.sleep(1) # Extra second buffer for the rest of the DOM to settle
-                except Exception:
-                    print(f"  -> Warning: Timeout waiting for {raw_date} to render.")
-                    time.sleep(3)
-                
-                # Wait explicitly for the AJAX request to finish by checking the date label
-                try:
-                    page.locator(f"#lblPayPeriodEndingDate:has-text('{raw_date}')").wait_for(state="visible", timeout=15000)
-                    time.sleep(1) # Extra second buffer for the rest of the DOM to settle
-                except Exception:
-                    print(f"  -> Warning: Timeout waiting for {raw_date} to render.")
-                    time.sleep(6)
+                    # Wait explicitly for the AJAX request and data to finish rendering
+                    try:
+                        page.locator(f"#lblPayPeriodEndingDate:has-text('{raw_date}')").wait_for(state="visible", timeout=15000)
+                        page.locator("text=Service Comp Date").wait_for(state="visible", timeout=15000)
+                        time.sleep(1) # Extra second buffer for the rest of the DOM to settle
+                    except Exception:
+                        print(f"  -> Warning: Timeout waiting for {raw_date} to render.")
+                        time.sleep(3)
+                else:
+                    # The page is already loaded with this data, no need to trigger a reload
+                    time.sleep(1)
 
                 # Save the raw HTML
-                page.screenshot(path=f"{filename}.png")
+                page.screenshot(path=f"{filename}.png") # You can remove this line if you no longer need screenshots
                 page_html = page.content()
                 with open(filename, 'w', encoding='utf-8') as f:
                     f.write(page_html)
