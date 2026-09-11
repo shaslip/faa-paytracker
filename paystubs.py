@@ -114,13 +114,15 @@ def run():
                 print(f"Downloading paystub for {formatted_date}...")
                 
                 # Select the dropdown option
+                page.select_option('#ddlELS', pp['value'])
+                
+                # Wait explicitly for the AJAX request to finish by checking the date label
                 try:
-                    with page.expect_navigation(timeout=10000):
-                        page.select_option('#ddlELS', pp['value'])
+                    page.locator(f"#lblPayPeriodEndingDate:has-text('{raw_date}')").wait_for(state="visible", timeout=15000)
+                    time.sleep(1) # Extra second buffer for the rest of the DOM to settle
                 except Exception:
-                    # Fallback if it uses AJAX instead of a hard redirect
-                    page.wait_for_load_state('networkidle')
-                    time.sleep(2)
+                    print(f"  -> Warning: Timeout waiting for {raw_date} to render.")
+                    time.sleep(6)
 
                 # Save the raw HTML
                 page_html = page.content()
