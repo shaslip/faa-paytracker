@@ -75,10 +75,23 @@ def parse_html_paystub(html_content, filename, conn):
         agency = soup.find(id="lblAgencyName").get_text().strip()
         
         print("[DEBUG] Extracting Pay Table...")
-        pay_table = soup.find("table", {"id": "Pay"})
+        
+        # 1. See what the old method was actually grabbing
+        old_pay_table = soup.find("table", {"id": "Pay"})
+        if old_pay_table:
+            print(f"  -> [OLD METHOD] Grabbed table with {len(old_pay_table.find_all('tr'))} rows.")
+            print(f"  -> [OLD METHOD HTML]: {str(old_pay_table)[:200]}...")
+
+        # 2. Test the new content-based method
+        pay_table = None
+        for tbl in soup.find_all("table"):
+            if tbl.find("th", string=lambda text: text and "Your Pay Consists of" in text):
+                pay_table = tbl
+                break
+
         if pay_table:
             rows = pay_table.find_all("tr")
-            print(f"  -> Found 'Pay' table with {len(rows)} rows.")
+            print(f"  -> [NEW METHOD] Found 'Pay' table with {len(rows)} rows.")
             for i, r in enumerate(rows):
                 cols = r.find_all("td")
                 print(f"    Row {i}: {len(cols)} columns")
@@ -87,7 +100,7 @@ def parse_html_paystub(html_content, filename, conn):
             total_deducs = clean_float(rows[2].find_all("td")[1].get_text())
             print(f"  -> Gross Pay: {gross_pay}, Total Deductions: {total_deducs}")
         else:
-            print("  -> ERROR: 'Pay' table not found!")
+            print("  -> ERROR: 'Your Pay Consists of' table not found!")
 
         remarks_node = soup.find(id="lblRemarks")
         remarks = remarks_node.get_text("\n").strip() if remarks_node else ""
