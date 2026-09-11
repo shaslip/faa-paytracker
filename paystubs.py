@@ -68,7 +68,7 @@ def run():
         print("Launching Playwright...")
         context = p.chromium.launch_persistent_context(
             user_data_dir=PROFILE_DIR,
-            headless=False, # Runs invisibly in the background
+            headless=True, # Runs invisibly in the background
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox"
