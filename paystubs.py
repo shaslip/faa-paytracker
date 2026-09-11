@@ -94,6 +94,15 @@ def run():
                 
             print(f"Found {len(pay_periods)} pay periods.")
 
+            # --- ASP.NET Workaround: Toggle dropdown to force data load ---
+            if len(pay_periods) > 1:
+                print("Toggling dropdown to force initial data load...")
+                page.select_option('#ddlELS', pay_periods[1]['value'])
+                time.sleep(3)
+                page.select_option('#ddlELS', pay_periods[0]['value'])
+                time.sleep(3)
+            # --------------------------------------------------------------
+
             for pp in pay_periods:
                 # Extract date: e.g., "08/22/2026 - Department of Transportation"
                 date_match = re.search(r'(\d{2}/\d{2}/\d{4})', pp['text'])
