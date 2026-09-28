@@ -1,8 +1,10 @@
 import sqlite3
 import pandas as pd
+import os
 from datetime import datetime, timedelta
 
-DB_NAME = 'payroll_audit.db'
+base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DB_NAME = os.path.join(base_dir, 'payroll_audit.db')
 
 def get_db():
     conn = sqlite3.connect(DB_NAME)
