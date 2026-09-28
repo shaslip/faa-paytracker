@@ -4,11 +4,19 @@ from pydantic import BaseModel
 from typing import Optional, List
 import sqlite3
 import pandas as pd
+import os
+import sys
+
+# Add src to path
+script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.join(script_dir, "src"))
+
 import logic
 from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
-DB_NAME = 'payroll_audit.db' 
+base_dir = os.path.dirname(script_dir)
+DB_NAME = os.path.join(base_dir, 'payroll_audit.db') 
 HOST = "0.0.0.0"             
 PORT = 5000
 
