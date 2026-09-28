@@ -208,6 +208,114 @@ async def get_holidays(year: Optional[int] = None):
         
     return results
 
+@app.get("/get_paystubs_summary")
+async def get_paystubs_summary():
+    """
+    Returns high-level history (Net Pay), current leave balances, 
+    and calculates the projected net pay for the next upcoming check.
+    """
+    stubs = models.get_paystubs_meta()
+    if stubs.empty:
+        return {"history": [], "leave": [], "projected": None}
+        
+    stubs = stubs.sort_values('period_ending', ascending=False)
+    last_stub = stubs.iloc[0]
+    last_stub_id = int(last_stub['id'])
+    last_pe = last_stub['period_ending']
+    
+    # 1. Recent History (Last 5)
+    history = stubs.head(5)[['period_ending', 'net_pay']].to_dict('records')
+    
+    # 2. Leave Balances
+    full_data = models.get_full_paystub_data(last_stub_id)
+    leave_df = full_data['leave']
+    leave_data = []
+    if not leave_df.empty:
+        for _, r in leave_df.iterrows():
+            leave_data.append({"type": r['type'], "balance": r['balance_end']})
+            
+    # 3. Projected Next Check
+    last_dt = datetime.strptime(last_pe, "%Y-%m-%d")
+    next_dt = last_dt + timedelta(days=14)
+    next_pe = next_dt.strftime("%Y-%m-%d")
+    
+    ts_v2 = models.load_timesheet_v2(next_pe)
+    ref_rate, ref_ded, ref_earn = models.get_reference_data(last_stub_id)
+    pe_year = next_dt.year
+    std_sched = models.get_user_schedule(pe_year).set_index('day_of_week')
+    
+    bucket_rows = []
+    for _, row in ts_v2.iterrows():
+        s_raw = row['Start']
+        e_raw = row['End']
+        s_obj = pd.to_datetime(s_raw, format='%H:%M').time() if pd.notna(s_raw) and str(s_raw).strip() not in ["None", ""] else None
+        e_obj = pd.to_datetime(e_raw, format='%H:%M').time() if pd.notna(e_raw) and str(e_raw).strip() not in ["None", ""] else None
+        
+        b = logic.calculate_daily_breakdown(
+            row['Date'], s_obj, e_obj, row['Leave_Type'], 
+            float(row['OJTI']) if pd.notna(row['OJTI']) else 0.0, 
+            float(row['CIC']) if pd.notna(row['CIC']) else 0.0, 
+            std_sched
+        )
+        bucket_rows.append(b)
+        
+    cols = ["Regular", "Overtime", "Night", "Sunday", "Holiday", "Hol_Leave", "Leave_Hrs", "OJTI", "CIC"]
+    buckets = pd.DataFrame(bucket_rows, columns=cols).fillna(0.0)
+    
+    dummy_meta = {
+        'agency': 'FAA', 'period_ending': next_pe, 'pay_date': 'Estimated',
+        'gross_pay': 0.0, 'net_pay': 0.0, 'total_deductions': 0.0,
+        'remarks': 'PROJECTED ESTIMATE'
+    }
+    
+    exp_data = logic.calculate_expected_pay(buckets, ref_rate, dummy_meta, ref_ded, pd.DataFrame(), ref_earn)
+    
+    projected = {
+        "period_ending": next_pe,
+        "net_pay": exp_data['stub']['net_pay']
+    }
+    
+    return {"history": history, "leave": leave_data, "projected": projected}
+
+@app.get("/get_ytd_stats")
+async def get_ytd_stats(year: Optional[int] = None):
+    """
+    Returns aggregated YTD earnings and deductions for the requested Tax Year.
+    """
+    target_year = year if year else datetime.now().year
+    df_earn, df_ded = models.get_all_line_items()
+    
+    if df_earn.empty and df_ded.empty:
+        return {"earnings": [], "deductions": []}
+        
+    # Filter by pay_date year (Tax Year)
+    df_earn['pay_date'] = pd.to_datetime(df_earn['pay_date'])
+    df_earn = df_earn[df_earn['pay_date'].dt.year == target_year]
+    
+    df_ded['pay_date'] = pd.to_datetime(df_ded['pay_date'])
+    df_ded = df_ded[df_ded['pay_date'].dt.year == target_year]
+    
+    def parse_hours(val):
+        if isinstance(val, str) and ":" in val:
+            parts = val.split(":")
+            return float(parts[0]) + float(parts[1]) / 60.0
+        return float(val) if pd.notna(val) else 0.0
+        
+    earn_data = []
+    if not df_earn.empty:
+        df_earn['hours_float'] = df_earn['hours_current'].apply(parse_hours)
+        ytd_earn = df_earn.groupby('type').agg(Amount=('amount_current', 'sum'), Hours=('hours_float', 'sum')).reset_index()
+        ytd_earn = ytd_earn.sort_values(by='Amount', ascending=False)
+        earn_data = ytd_earn.to_dict('records')
+        
+    ded_data = []
+    if not df_ded.empty:
+        ytd_ded = df_ded.groupby('type').agg(Amount=('amount_current', 'sum')).reset_index()
+        ytd_ded = ytd_ded.sort_values(by='Amount', ascending=False)
+        ded_data = ytd_ded.to_dict('records')
+        
+    return {"earnings": earn_data, "deductions": ded_data}
+
 if __name__ == "__main__":
     print(f"🚀 Listener active at http://{HOST}:{PORT}")
     uvicorn.run(app, host=HOST, port=PORT)
