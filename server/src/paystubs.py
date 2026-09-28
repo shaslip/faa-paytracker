@@ -5,16 +5,20 @@ import pyotp
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
+base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # Load environment variables
-load_dotenv()
+env_path = os.path.join(base_dir, '.env')
+load_dotenv(dotenv_path=env_path)
+
 EMAIL = os.getenv("LOGIN_GOV_EMAIL")
 PASSWORD = os.getenv("LOGIN_GOV_PASSWORD")
 TOTP_SECRET = os.getenv("LOGIN_GOV_TOTP_SECRET")
 
 # Configuration
 START_URL = "https://www.employeeexpress.gov/ELS"
-OUTPUT_DIR = "PayStubs"
-PROFILE_DIR = "./playwright_profile"
+OUTPUT_DIR = os.path.join(base_dir, "data", "PayStubs")
+PROFILE_DIR = os.path.join(base_dir, "playwright_profile")
 
 def login(page):
     print("Navigating to Employee Express...")
