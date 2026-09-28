@@ -41,7 +41,7 @@ async def ingest_mobile_data(entries: List[ShiftEntry]):
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Receiving {len(entries)} mobile entries...")
     
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_NAME, timeout=10)
     c = conn.cursor()
     
     count = 0
@@ -98,7 +98,7 @@ async def get_schedule_defaults():
     """
     Returns ALL schedule rows (all years) so the mobile app can cache them.
     """
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_NAME, timeout=10)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     try:
@@ -128,7 +128,7 @@ async def get_saved_shifts(year: Optional[int] = None):
     """
     target_year = year if year else datetime.now().year
     
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_NAME, timeout=10)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     try:
@@ -163,11 +163,13 @@ async def get_holidays(year: Optional[int] = None):
     target_year = year if year else datetime.now().year
     
     # 1. Load the schedule for that year (needed for the slide rule)
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_NAME, timeout=10)
     conn.row_factory = sqlite3.Row
-    # Fetch schedule and format for logic.py (index by day_of_week)
-    sched_df = pd.read_sql("SELECT * FROM user_schedule WHERE year = ?", conn, params=(target_year,))
-    conn.close()
+    try:
+        # Fetch schedule and format for logic.py (index by day_of_week)
+        sched_df = pd.read_sql("SELECT * FROM user_schedule WHERE year = ?", conn, params=(target_year,))
+    finally:
+        conn.close()
     
     if sched_df.empty:
         # Fallback if no schedule exists for that year
