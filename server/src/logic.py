@@ -6,9 +6,9 @@ import os
 from datetime import datetime, timedelta
 
 def load_holidays():
-    """Loads holidays from holidays.json located in the same directory."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    json_path = os.path.join(script_dir, "holidays.json")
+    """Loads holidays from holidays.json located in the data directory."""
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    json_path = os.path.join(base_dir, "data", "holidays.json")
     
     if os.path.exists(json_path):
         with open(json_path, 'r') as f:
