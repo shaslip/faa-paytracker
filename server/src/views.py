@@ -3,7 +3,8 @@ import os
 
 def get_css():
     """Reads the external style.css file."""
-    css_file = 'style.css'
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    css_file = os.path.join(script_dir, 'style.css')
     if os.path.exists(css_file):
         with open(css_file) as f:
             return f'<style>{f.read()}</style>'
