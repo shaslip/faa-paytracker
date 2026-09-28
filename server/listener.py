@@ -276,7 +276,7 @@ async def get_paystubs_summary():
         "net_pay": exp_data['stub']['net_pay']
     }
     
-    return {"history": history, "leave": leave_data, "projected": projected}
+    return {"history": history, "leave": leave_data, "projected": projected, "base_rate": ref_rate}
 
 @app.get("/get_ytd_stats")
 async def get_ytd_stats(year: Optional[int] = None):
