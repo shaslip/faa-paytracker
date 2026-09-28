@@ -3,7 +3,7 @@ import sqlite3
 import requests
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
 DEFAULT_IP = "http://10.0.0.77:5000"
@@ -58,7 +58,7 @@ def init_db():
         conn.close()
 
 def main(page: ft.Page):
-    APP_VERSION = "1.3.0"
+    APP_VERSION = "1.3.1"
     UPDATE_URL = "https://raw.githubusercontent.com/shaslip/faa-paytracker/main/mobile/version.json"
     page.title = "FAA PayTracker"
     page.theme_mode = ft.ThemeMode.LIGHT
@@ -70,36 +70,6 @@ def main(page: ft.Page):
     # --- SETTINGS LOGIC ---
     stored_ip = page.client_storage.get("server_ip")
     current_ip = stored_ip if stored_ip else DEFAULT_IP
-
-    def check_for_update():
-        try:
-            r = requests.get(UPDATE_URL, timeout=3)
-            if r.status_code == 200:
-                data = r.json()
-                latest = data.get("latest_version", "0.0.0")
-                apk_url = data.get("apk_url", "")
-                if latest > APP_VERSION:
-                    show_update_dialog(latest, apk_url)
-        except:
-            pass 
-
-    def show_update_dialog(new_ver, url):
-        def dl_update(e):
-            page.launch_url(url)
-            update_dialog.open = False
-            page.update()
-
-        update_dialog = ft.AlertDialog(
-            title=ft.Text("Update Available"),
-            content=ft.Text(f"Version {new_ver} is available."),
-            actions=[
-                ft.TextButton("Update Now", on_click=dl_update),
-                ft.TextButton("Later", on_click=lambda e: setattr(update_dialog, 'open', False) or page.update()),
-            ],
-        )
-        page.overlay.append(update_dialog)
-        update_dialog.open = True
-        page.update()
 
     def get_url():
         return current_ip
@@ -144,14 +114,57 @@ def main(page: ft.Page):
     lbl_status = ft.Text(value="Ready", color="grey")
 
     # ==========================================
+    # LOCAL MATH ENGINE (Estimates Gross Bump)
+    # ==========================================
+    def calculate_pending_bump():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.row_factory = sqlite3.Row
+        try:
+            rate_row = conn.execute("SELECT value1 FROM paystub_summary WHERE type='rate'").fetchone()
+            base_rate = rate_row['value1'] if rate_row else 0.0
+            if base_rate <= 0: return 0.0
+
+            queue = conn.execute("SELECT * FROM offline_queue").fetchall()
+            bump = 0.0
+
+            def time_diff(start_str, end_str):
+                if not start_str or not end_str: return 0.0
+                s = datetime.strptime(start_str, "%H:%M")
+                e = datetime.strptime(end_str, "%H:%M")
+                if e < s: e += timedelta(days=1)
+                return (e - s).total_seconds() / 3600.0
+
+            for q in queue:
+                dt = datetime.strptime(q['day_date'], "%Y-%m-%d")
+                day_idx = dt.weekday()
+                target_year = dt.year
+                
+                def_row = conn.execute("SELECT start_time, end_time FROM schedule_defaults WHERE year=? AND day_idx=?", (target_year, day_idx)).fetchone()
+                
+                std_hours = 0.0
+                if def_row and def_row['start_time'] and def_row['end_time']:
+                    std_hours = time_diff(def_row['start_time'], def_row['end_time'])
+                    
+                act_hours = time_diff(q['start_time'], q['end_time'])
+                
+                # Overtime is anything beyond standard hours
+                ot_hours = max(0.0, act_hours - std_hours)
+                
+                ojti = q['ojti_hours'] if q['ojti_hours'] else 0.0
+                cic = q['cic_hours'] if q['cic_hours'] else 0.0
+                
+                bump += (ot_hours * base_rate * 1.5)
+                bump += (ojti * base_rate * 0.25)
+                bump += (cic * base_rate * 0.10)
+                
+            return bump
+        finally:
+            conn.close()
+
+    # ==========================================
     # TAB 1: ADD SHIFT
     # ==========================================
-    txt_date = ft.TextField(
-        label="Date", 
-        value=datetime.now().strftime("%Y-%m-%d"), 
-        read_only=True,
-        expand=True
-    )
+    txt_date = ft.TextField(label="Date", value=datetime.now().strftime("%Y-%m-%d"), read_only=True, expand=True)
 
     def auto_colon(e):
         prev_len = e.control.data if e.control.data is not None else 0
@@ -171,7 +184,6 @@ def main(page: ft.Page):
                 new_date = datetime.now()
 
         txt_date.value = new_date.strftime("%Y-%m-%d")
-        
         day_idx = new_date.weekday()
         target_year = new_date.year
         date_str = txt_date.value
@@ -278,70 +290,52 @@ def main(page: ft.Page):
             finally:
                 conn.close()
 
-            lbl_status.value = f"Saved {txt_date.value}"
-            lbl_status.color = "green"
-            
+            # Refresh views
             load_pending_queue()
+            load_paystub_summary() # This applies the pending bump to the Next Check label
+            
+            bump = calculate_pending_bump()
+            if bump > 0:
+                lbl_status.value = f"Saved! Est bump: +${bump:,.2f} Gross"
+            else:
+                lbl_status.value = f"Saved {txt_date.value}"
+            lbl_status.color = "green"
             
         except Exception as err:
             lbl_status.value = f"Error: {str(err)}"
             lbl_status.color = "red"
         page.update()
 
-    def sync_to_pc_click(e):
-        lbl_status.value = "Syncing Shifts..."
+    def sync_data_click(e):
+        lbl_status.value = "Syncing with PC..."
         page.update()
         try:
             conn = sqlite3.connect(DB_NAME, timeout=10)
             conn.row_factory = sqlite3.Row
             try:
+                # 1. PUSH local changes first
                 rows = conn.execute("SELECT * FROM offline_queue").fetchall()
-                
                 if rows:
                     payload = [dict(r) for r in rows]
                     r = requests.post(f"{get_url()}/mobile_sync", json=payload, timeout=5)
                     if r.status_code == 200:
                         conn.execute("DELETE FROM offline_queue")
                         conn.commit()
-                        lbl_status.value = f"Synced {len(rows)} entries."
-                        lbl_status.color = "green"
-                    else:
-                        lbl_status.value = f"Server Error: {r.status_code}"
-                        lbl_status.color = "red"
-                else:
-                    lbl_status.value = "Queue empty."
-            finally:
-                conn.close()
-            
-            load_pending_queue()
-            
-        except Exception as err:
-            lbl_status.value = f"Connection Failed: {str(err)}"
-            lbl_status.color = "red"
-        page.update()
+                
+                # 2. PULL fresh data
+                r_sched = requests.get(f"{get_url()}/get_schedule_defaults", timeout=5)
+                r_shifts = requests.get(f"{get_url()}/get_saved_shifts?year={datetime.now().year}", timeout=5)
+                r_summary = requests.get(f"{get_url()}/get_paystubs_summary", timeout=5)
+                r_ytd = requests.get(f"{get_url()}/get_ytd_stats?year={datetime.now().year}", timeout=5)
+                
+                holidays = []
+                years = [datetime.now().year, datetime.now().year + 1]
+                for y in years:
+                    r_hol = requests.get(f"{get_url()}/get_holidays?year={y}", timeout=5)
+                    if r_hol.status_code == 200:
+                        holidays.extend(r_hol.json())
 
-    def get_updates_click(e):
-        lbl_status.value = "Downloading Data..."
-        page.update()
-        try:
-            # 1. Fetch ALL data first (Don't lock the database yet!)
-            r_sched = requests.get(f"{get_url()}/get_schedule_defaults", timeout=5)
-            r_shifts = requests.get(f"{get_url()}/get_saved_shifts?year={datetime.now().year}", timeout=5)
-            
-            holidays = []
-            years = [datetime.now().year, datetime.now().year + 1]
-            for y in years:
-                r_hol = requests.get(f"{get_url()}/get_holidays?year={y}", timeout=5)
-                if r_hol.status_code == 200:
-                    holidays.extend(r_hol.json())
-
-            # --- NEW: Fetch Paystub Summary & YTD ---
-            r_summary = requests.get(f"{get_url()}/get_paystubs_summary", timeout=5)
-            r_ytd = requests.get(f"{get_url()}/get_ytd_stats?year={datetime.now().year}", timeout=5)
-
-            # 2. Now that network calls are done, open DB and write quickly
-            conn = sqlite3.connect(DB_NAME, timeout=10)
-            try:
+                # 3. WRITE downloaded data
                 if r_sched.status_code == 200:
                     conn.execute("DELETE FROM schedule_defaults")
                     for i in r_sched.json():
@@ -365,6 +359,11 @@ def main(page: ft.Page):
                 if r_summary.status_code == 200:
                     conn.execute("DELETE FROM paystub_summary")
                     data = r_summary.json()
+                    
+                    # Store Base Rate for local math
+                    base_rate = data.get('base_rate', 0.0)
+                    conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('rate', 'base', base_rate, None))
+                    
                     for h in data.get('history', []):
                         conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('history', h['period_ending'], h['net_pay'], None))
                     for l in data.get('leave', []):
@@ -385,17 +384,18 @@ def main(page: ft.Page):
             finally:
                 conn.close()
 
-            lbl_status.value = "Updates Downloaded!"
+            lbl_status.value = "Sync Complete!"
             lbl_status.color = "green"
             
-            # Reload views
+            # Reload all views
             load_holidays_from_db()
             load_paystub_summary()
             load_ytd_summary()
+            load_pending_queue()
             change_date(None)
             
         except Exception as err:
-            lbl_status.value = f"Error: {str(err)}"
+            lbl_status.value = f"Sync Failed: {str(err)}"
             lbl_status.color = "red"
         page.update()
 
@@ -410,10 +410,7 @@ def main(page: ft.Page):
             ft.Row([txt_ojti, txt_cic], alignment="spaceBetween"),
             ft.Divider(),
             ft.ElevatedButton("Save Local", icon=ft.Icons.SAVE, on_click=save_local_click, width=400),
-            ft.Row([
-                ft.ElevatedButton("Sync to PC", icon=ft.Icons.UPLOAD, on_click=sync_to_pc_click, expand=True),
-                ft.ElevatedButton("Download", icon=ft.Icons.DOWNLOAD, on_click=get_updates_click, expand=True),
-            ]),
+            ft.ElevatedButton("Sync data with PC", icon=ft.Icons.SYNC, on_click=sync_data_click, width=400),
             ft.Container(height=10),
             lbl_status
         ])
@@ -490,9 +487,14 @@ def main(page: ft.Page):
         history_table.rows.clear()
         lbl_projected.value = "Next Check: N/A"
         
+        pending_bump = calculate_pending_bump()
+        
         for r_type, label, val in rows:
             if r_type == 'projected':
-                lbl_projected.value = f"Next Check ({label}): ${val:,.2f}"
+                if pending_bump > 0:
+                    lbl_projected.value = f"Next Check ({label}): ${val:,.2f} (+${pending_bump:,.2f} pending)"
+                else:
+                    lbl_projected.value = f"Next Check ({label}): ${val:,.2f}"
             elif r_type == 'leave':
                 leave_table.rows.append(ft.DataRow(cells=[
                     ft.DataCell(ft.Text(label)), 
@@ -599,7 +601,6 @@ def main(page: ft.Page):
     def load_pending_queue():
         conn = sqlite3.connect(DB_NAME, timeout=10)
         try:
-            # Fetch everything exactly as it is in the queue
             rows = conn.execute("SELECT day_date, start_time, end_time, leave_type, ojti_hours, cic_hours FROM offline_queue ORDER BY day_date DESC").fetchall()
         finally:
             conn.close()
