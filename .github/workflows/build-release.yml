@@ -44,6 +44,9 @@ jobs:
           VERSION=${GITHUB_REF_NAME#v}
           yes | flet build apk --project "Audit FAA" --module-name mobile_app --build-version $VERSION
 
+      - name: Install Android Build Tools
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;29.0.3"
+
       - name: Sign APK
         uses: r0adkll/sign-android-release@v1
         id: sign_app
@@ -53,7 +56,6 @@ jobs:
           alias: ${{ secrets.KEY_ALIAS }}
           keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.KEYSTORE_PASSWORD }}
-          buildToolsVersion: 34.0.0
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
