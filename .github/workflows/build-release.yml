@@ -30,7 +30,7 @@ jobs:
       - name: Install Flet
         run: |
           python -m pip install --upgrade pip
-          pip install flet
+          pip install flet==0.25.2
           if [ -f mobile/requirements.txt ]; then pip install -r mobile/requirements.txt; fi
 
       # Added: 'yes |' automatically answers 'y' to the installation prompt
