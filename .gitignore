@@ -1,7 +1,16 @@
-# Private database
-payroll_audit.db
+# Environments and Secrets
+.env
+__pycache__/
+*.py[cod]
 
-# Private pay stubs (keep directory structure only)
-PayStubs/*
-!PayStubs/.gitkeep
-temp/*
+# Databases
+*.db
+
+# Build, Temp, and Storage directories
+build/
+temp/
+storage/
+playwright_profile/
+
+# Ignore downloaded paystubs
+data/PayStubs/*.html
