@@ -43,7 +43,9 @@ def load_holidays_from_file(year):
     ]
     
     try:
-        with open("holidays.json", "r") as f:
+        base_dir = os.path.dirname(script_dir) # Points to PayTracker root
+        holidays_path = os.path.join(base_dir, "data", "holidays.json")
+        with open(holidays_path, "r") as f:
             data = json.load(f)
             
         # Get dates for the specific year requested
@@ -859,9 +861,10 @@ with tab_ingest:
             with st.status("Initializing browser...", expanded=True) as status:
                 log_container = st.empty()
                 
+                paystubs_script = os.path.join(script_dir, "src", "paystubs.py")
                 # Use Popen to run it in the background, and "-u" to force unbuffered output (real-time)
                 process = subprocess.Popen(
-                    [sys.executable, "-u", "paystubs.py"], 
+                    [sys.executable, "-u", paystubs_script], 
                     stdout=subprocess.PIPE, 
                     stderr=subprocess.STDOUT, 
                     text=True
@@ -909,7 +912,8 @@ with tab_ingest:
         
         if st.button("Scan PayStubs"):
             with st.spinner("Parsing files..."):
-                result = subprocess.run([sys.executable, "ingest.py"], capture_output=True, text=True)
+                ingest_script = os.path.join(script_dir, "src", "ingest.py")
+                result = subprocess.run([sys.executable, ingest_script], capture_output=True, text=True)
                 
                 if result.returncode == 0:
                     st.success("Scan processed successfully.")
