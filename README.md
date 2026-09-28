@@ -16,7 +16,7 @@ You need Python installed. This project relies on the following libraries:
 
 **1. For the Server & Dashboard (Desktop)**
 ```bash
-pip install -r requirements-server.txt
+pip install -r server/requirements-server.txt
 playwright install chromium
 ```
 
@@ -31,20 +31,10 @@ LOGIN_GOV_TOTP_SECRET=YOUR_AUTHENTICATOR_SECRET_KEY
 
 Note: to get the LOGIN_GOV_TOTP_SECRET sign in to login.gov, find "Add authentication apps" in the left menu, then copy the long string of text below the QR code. If instead you see a page called "Your authentication methods" you already have two "Authentication apps" set-up and you'd need to delete one of them and click "Add authentication apps" again. 
 
-
-**3. (Optional) Install the Mobile App on your phone**
-
-Modify `DEFAULT_IP` in `mobile_app.py` to match `hostname -I` output from your console.
-
-Test:
-```bash
-flet run mobile_app.py --web --port 8550
-```
-Build the mobile app:
-```bash
-flet build apk --project "Audit FAA" --module-name mobile_app
-```
-Look for `app-release.apk` located in `/build/apk` and transfer that to your phone, then install it.
+**3. Install the Mobile App on your phone**
+The mobile app APK is automatically built and hosted in the GitHub Releases section.
+* **Recommended:** Use [Obtainium](https://github.com/ImranR98/Obtainium) to install and automatically update the app directly from this repository.
+* **Manual:** Download `app-release.apk` from the latest GitHub Release and sideload it. The app will notify you when a new release is pushed to GitHub.
 
 ## Files and Descriptions
 
@@ -84,9 +74,10 @@ PayTracker/
 ## How to Use
 
 ### 1. Launch the Dashboard
-Start the visual interface:
+Start the visual interface from the root directory:
+
 ```bash
-streamlit run dashboard.py
+streamlit run server/dashboard.py
 ```
 Your browser will open to `http://localhost:8501`.
 
@@ -95,7 +86,7 @@ Navigate to the **"Ingestion"** tab in the dashboard:
 1. Click **"Download New Paystubs"** to automatically log in to Employee Express and download any missing paystubs.
 2. Click **"Scan PayStubs"** to parse the newly downloaded files and update the tracker database.
 
-*(Note: You can manually save raw HTML files in the format `YYYY-MM-DD.html` into the `PayStubs/` folder if you prefer).*
+*(Note: You can manually save raw HTML files in the format `YYYY-MM-DD.html` into the `data/PayStubs/` folder if you prefer).*
 
 ## The Workflow
 
