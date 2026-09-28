@@ -1,9 +1,15 @@
 import streamlit as st
 import pandas as pd
+import os
+import sys
+
+# src to path so we can import models, logic, views normally
+script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.join(script_dir, "src"))
+
 import models
 import logic
 import views
-import os
 import json
 from datetime import datetime, timedelta, date
 import socket
