@@ -21,40 +21,37 @@ def init_db():
         c.execute('''
             CREATE TABLE IF NOT EXISTS offline_queue (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                day_date TEXT,
-                start_time TEXT,
-                end_time TEXT,
-                leave_type TEXT,
-                ojti_hours REAL,
-                cic_hours REAL,
-                timestamp TEXT
+                day_date TEXT, start_time TEXT, end_time TEXT,
+                leave_type TEXT, ojti_hours REAL, cic_hours REAL, timestamp TEXT
             )
         ''')
         c.execute('''
             CREATE TABLE IF NOT EXISTS schedule_defaults (
-                year INTEGER,
-                day_idx INTEGER,
-                start_time TEXT,
-                end_time TEXT,
+                year INTEGER, day_idx INTEGER,
+                start_time TEXT, end_time TEXT,
                 PRIMARY KEY (year, day_idx)
             )
         ''')
         c.execute('''
             CREATE TABLE IF NOT EXISTS holiday_cache (
-                year INTEGER,
-                name TEXT,
-                date TEXT,
-                day TEXT
+                year INTEGER, name TEXT, date TEXT, day TEXT
             )
         ''')
         c.execute('''
             CREATE TABLE IF NOT EXISTS server_actuals (
-                day_date TEXT PRIMARY KEY,
-                start_time TEXT,
-                end_time TEXT,
-                leave_type TEXT,
-                ojti_hours REAL,
-                cic_hours REAL
+                day_date TEXT PRIMARY KEY, start_time TEXT, end_time TEXT,
+                leave_type TEXT, ojti_hours REAL, cic_hours REAL
+            )
+        ''')
+        # --- NEW TABLES FOR PAYSTUB & YTD ---
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS paystub_summary (
+                type TEXT, label TEXT, value1 REAL, value2 TEXT
+            )
+        ''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS ytd_stats (
+                year INTEGER, category TEXT, type TEXT, amount REAL, hours REAL
             )
         ''')
         conn.commit()
@@ -62,7 +59,7 @@ def init_db():
         conn.close()
 
 def main(page: ft.Page):
-    APP_VERSION = "1.2.9"
+    APP_VERSION = "1.3.0"
     UPDATE_URL = "https://raw.githubusercontent.com/shaslip/faa-paytracker/main/mobile/version.json"
     page.title = "FAA PayTracker"
     page.theme_mode = ft.ThemeMode.LIGHT
@@ -77,22 +74,18 @@ def main(page: ft.Page):
 
     def check_for_update():
         try:
-            # Short timeout so app doesn't hang if offline
             r = requests.get(UPDATE_URL, timeout=3)
             if r.status_code == 200:
                 data = r.json()
                 latest = data.get("latest_version", "0.0.0")
                 apk_url = data.get("apk_url", "")
-
-                # Simple string compare (or use packaging.version for robust handling)
                 if latest > APP_VERSION:
                     show_update_dialog(latest, apk_url)
         except:
-            pass # Fail silently if offline
+            pass 
 
     def show_update_dialog(new_ver, url):
         def dl_update(e):
-            # This opens the system browser to handle the download & install prompt
             page.launch_url(url)
             update_dialog.open = False
             page.update()
@@ -132,7 +125,7 @@ def main(page: ft.Page):
             txt_ip,
             ft.Container(height=10),
             ft.Text(f"Version: {APP_VERSION}", size=12, color=ft.Colors.GREY_500)
-        ], tight=True, width=300),  # tight=True makes it fit content height
+        ], tight=True, width=300),
         actions=[
             ft.TextButton("Save", on_click=save_settings),
             ft.TextButton("Cancel", on_click=lambda e: setattr(settings_dialog, 'open', False) or page.update()),
@@ -154,7 +147,6 @@ def main(page: ft.Page):
     # ==========================================
     # TAB 1: ADD SHIFT
     # ==========================================
-    
     txt_date = ft.TextField(
         label="Date", 
         value=datetime.now().strftime("%Y-%m-%d"), 
@@ -344,6 +336,10 @@ def main(page: ft.Page):
                 if r_hol.status_code == 200:
                     holidays.extend(r_hol.json())
 
+            # --- NEW: Fetch Paystub Summary & YTD ---
+            r_summary = requests.get(f"{get_url()}/get_paystubs_summary", timeout=5)
+            r_ytd = requests.get(f"{get_url()}/get_ytd_stats?year={datetime.now().year}", timeout=5)
+
             # 2. Now that network calls are done, open DB and write quickly
             conn = sqlite3.connect(DB_NAME, timeout=10)
             try:
@@ -361,12 +357,31 @@ def main(page: ft.Page):
                             VALUES (?, ?, ?, ?, ?, ?)
                         """, (s['date'], s['start'], s['end'], s['leave'], s['ojti'], s['cic']))
 
-                if holidays:  # Only delete and overwrite if we actually got data!
+                if holidays:
                     conn.execute("DELETE FROM holiday_cache")
                     for h in holidays:
                         conn.execute("INSERT INTO holiday_cache VALUES (?,?,?,?)", 
                                      (h['year'], h['name'], h['date'], h['day']))
-                
+
+                if r_summary.status_code == 200:
+                    conn.execute("DELETE FROM paystub_summary")
+                    data = r_summary.json()
+                    for h in data.get('history', []):
+                        conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('history', h['period_ending'], h['net_pay'], None))
+                    for l in data.get('leave', []):
+                        conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('leave', l['type'], l['balance'], None))
+                    proj = data.get('projected')
+                    if proj:
+                        conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('projected', proj['period_ending'], proj['net_pay'], None))
+                        
+                if r_ytd.status_code == 200:
+                    conn.execute("DELETE FROM ytd_stats WHERE year=?", (datetime.now().year,))
+                    data = r_ytd.json()
+                    for e in data.get('earnings', []):
+                        conn.execute("INSERT INTO ytd_stats VALUES (?,?,?,?,?)", (datetime.now().year, 'earnings', e['type'], e['Amount'], e['Hours']))
+                    for d in data.get('deductions', []):
+                        conn.execute("INSERT INTO ytd_stats VALUES (?,?,?,?,?)", (datetime.now().year, 'deductions', d['type'], d['Amount'], 0.0))
+
                 conn.commit()
             finally:
                 conn.close()
@@ -374,7 +389,10 @@ def main(page: ft.Page):
             lbl_status.value = "Updates Downloaded!"
             lbl_status.color = "green"
             
+            # Reload views
             load_holidays_from_db()
+            load_paystub_summary()
+            load_ytd_summary()
             change_date(None)
             
         except Exception as err:
@@ -395,7 +413,7 @@ def main(page: ft.Page):
             ft.ElevatedButton("Save Local", icon=ft.Icons.SAVE, on_click=save_local_click, width=400),
             ft.Row([
                 ft.ElevatedButton("Sync to PC", icon=ft.Icons.UPLOAD, on_click=sync_to_pc_click, expand=True),
-                ft.ElevatedButton("Download schedule", icon=ft.Icons.DOWNLOAD, on_click=get_updates_click, expand=True),
+                ft.ElevatedButton("Download", icon=ft.Icons.DOWNLOAD, on_click=get_updates_click, expand=True),
             ]),
             ft.Container(height=10),
             lbl_status
@@ -446,7 +464,124 @@ def main(page: ft.Page):
     )
 
     # ==========================================
-    # TAB 3: PENDING (RAW DUMP)
+    # TAB 3: PAYSTUB SUMMARY
+    # ==========================================
+    lbl_projected = ft.Text("Next Check: N/A", size=20, weight="bold", color=ft.Colors.GREEN_700)
+    
+    leave_table = ft.DataTable(
+        columns=[ft.DataColumn(ft.Text("Leave Type")), ft.DataColumn(ft.Text("Balance"))],
+        heading_row_color=ft.Colors.GREY_200,
+        width=400
+    )
+    
+    history_table = ft.DataTable(
+        columns=[ft.DataColumn(ft.Text("Period Ending")), ft.DataColumn(ft.Text("Net Pay"))],
+        heading_row_color=ft.Colors.GREY_200,
+        width=400
+    )
+
+    def load_paystub_summary():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        try:
+            rows = conn.execute("SELECT type, label, value1 FROM paystub_summary").fetchall()
+        finally:
+            conn.close()
+            
+        leave_table.rows.clear()
+        history_table.rows.clear()
+        lbl_projected.value = "Next Check: N/A"
+        
+        for r_type, label, val in rows:
+            if r_type == 'projected':
+                lbl_projected.value = f"Next Check ({label}): ${val:,.2f}"
+            elif r_type == 'leave':
+                leave_table.rows.append(ft.DataRow(cells=[
+                    ft.DataCell(ft.Text(label)), 
+                    ft.DataCell(ft.Text(f"{val:.2f}"))
+                ]))
+            elif r_type == 'history':
+                history_table.rows.append(ft.DataRow(cells=[
+                    ft.DataCell(ft.Text(label)), 
+                    ft.DataCell(ft.Text(f"${val:,.2f}"))
+                ]))
+        page.update()
+
+    tab_paystub_content = ft.Container(
+        padding=10,
+        content=ft.Column([
+            ft.Text("Paystub Summary", size=20, weight="bold"),
+            lbl_projected,
+            ft.Divider(),
+            ft.Text("Current Leave Balances", size=16, weight="bold"),
+            leave_table,
+            ft.Divider(),
+            ft.Text("Recent History", size=16, weight="bold"),
+            history_table,
+        ], scroll=ft.ScrollMode.ADAPTIVE, height=650)
+    )
+
+    # ==========================================
+    # TAB 4: YTD STATS
+    # ==========================================
+    ytd_earn_table = ft.DataTable(
+        columns=[
+            ft.DataColumn(ft.Text("Earnings Type")), 
+            ft.DataColumn(ft.Text("Hrs")), 
+            ft.DataColumn(ft.Text("Amount"))
+        ],
+        heading_row_color=ft.Colors.GREY_200,
+        width=400,
+        column_spacing=10
+    )
+    
+    ytd_ded_table = ft.DataTable(
+        columns=[
+            ft.DataColumn(ft.Text("Deduction Type")), 
+            ft.DataColumn(ft.Text("Amount"))
+        ],
+        heading_row_color=ft.Colors.GREY_200,
+        width=400
+    )
+
+    def load_ytd_summary():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        try:
+            rows = conn.execute("SELECT category, type, amount, hours FROM ytd_stats WHERE year=?", (datetime.now().year,)).fetchall()
+        finally:
+            conn.close()
+            
+        ytd_earn_table.rows.clear()
+        ytd_ded_table.rows.clear()
+        
+        for cat, r_type, amt, hrs in rows:
+            if cat == 'earnings':
+                ytd_earn_table.rows.append(ft.DataRow(cells=[
+                    ft.DataCell(ft.Text(r_type, size=12)), 
+                    ft.DataCell(ft.Text(f"{hrs:.2f}", size=12)), 
+                    ft.DataCell(ft.Text(f"${amt:,.2f}", size=12))
+                ]))
+            elif cat == 'deductions':
+                ytd_ded_table.rows.append(ft.DataRow(cells=[
+                    ft.DataCell(ft.Text(r_type, size=12)), 
+                    ft.DataCell(ft.Text(f"${amt:,.2f}", size=12))
+                ]))
+        page.update()
+
+    tab_ytd_content = ft.Container(
+        padding=10,
+        content=ft.Column([
+            ft.Text(f"YTD Totals ({datetime.now().year})", size=20, weight="bold"),
+            ft.Divider(),
+            ft.Text("Earnings", size=16, weight="bold"),
+            ytd_earn_table,
+            ft.Divider(),
+            ft.Text("Deductions", size=16, weight="bold"),
+            ytd_ded_table,
+        ], scroll=ft.ScrollMode.ADAPTIVE, height=650)
+    )
+
+    # ==========================================
+    # TAB 5: PENDING (RAW DUMP)
     # ==========================================
     pending_table = ft.DataTable(
         columns=[
@@ -472,7 +607,6 @@ def main(page: ft.Page):
 
         pending_table.rows.clear()
         
-        # Helper: Convert 1.5 -> "1:30"
         def fmt_hours(val):
             if not val or val <= 0: return "-"
             h = int(val)
@@ -480,12 +614,9 @@ def main(page: ft.Page):
             return f"{h}:{m:02d}"
 
         for d, s, e, l, o, c in rows:
-            # Display "-" for blanks, but show ALL data regardless of defaults
             s_disp = s if s else "-"
             e_disp = e if e else "-"
             l_disp = l if l and l != "None" else "-"
-            
-            # Apply the formatting here
             o_disp = fmt_hours(o)
             c_disp = fmt_hours(c)
 
@@ -499,7 +630,6 @@ def main(page: ft.Page):
                     ft.DataCell(ft.Text(c_disp, size=12)),  
                 ])
             )
-        
         page.update()
 
     tab_pending_content = ft.Container(
@@ -517,14 +647,20 @@ def main(page: ft.Page):
         animation_duration=300,
         tabs=[
             ft.Tab(text="Add Shift", icon=ft.Icons.ADD_TASK, content=tab_shift_content),
-            ft.Tab(text="Pending", icon=ft.Icons.PENDING_ACTIONS, content=tab_pending_content),
+            ft.Tab(text="PayStub", icon=ft.Icons.ATTACH_MONEY, content=tab_paystub_content),
+            ft.Tab(text="YTD", icon=ft.Icons.BAR_CHART, content=tab_ytd_content),
             ft.Tab(text="Holidays", icon=ft.Icons.CALENDAR_MONTH, content=tab_holidays_content),
+            ft.Tab(text="Pending", icon=ft.Icons.PENDING_ACTIONS, content=tab_pending_content),
         ],
         expand=1,
     )
 
     page.add(t)
+    
+    # Load all cached views
     load_holidays_from_db()
+    load_paystub_summary()
+    load_ytd_summary()
     load_pending_queue()
     change_date(None)
 
