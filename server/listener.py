@@ -12,6 +12,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(script_dir, "src"))
 
 import logic
+import models
 from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
