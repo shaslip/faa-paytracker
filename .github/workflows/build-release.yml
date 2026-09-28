@@ -20,7 +20,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      # Added: Flutter requires Java to build Android apps
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -33,17 +32,21 @@ jobs:
           flutter-version: '3.24.3'
           channel: 'stable'
 
+      - name: Cache Android Keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-keystore
+
       - name: Install Flet
         run: |
           python -m pip install --upgrade pip
           pip install flet==0.25.2
           if [ -f mobile/requirements.txt ]; then pip install -r mobile/requirements.txt; fi
 
-      # Added: 'yes |' automatically answers 'y' to the installation prompt
       - name: Build APK
         working-directory: ./mobile
         run: |
-          # Strip the 'v' from the tag (e.g., v1.2.3 becomes 1.2.3)
           VERSION=${GITHUB_REF_NAME#v}
           yes | flet build apk --project "Audit FAA" --module-name mobile_app --build-version $VERSION
 
