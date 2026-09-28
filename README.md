@@ -50,28 +50,33 @@ Look for `app-release.apk` located in `/build/apk` and transfer that to your pho
 
 ```text
 PayTracker/
-├── Desktop Server & Dashboard
-│   ├── dashboard.py             # Main Streamlit visualization app
-│   ├── listener.py              # Local API server (Port 5000) for the mobile app
-│   ├── logic.py                 # Core math, payroll rules, and audit logic
-│   ├── models.py                # Database queries and table setup
-│   ├── views.py                 # UI rendering and HTML generation for the dashboard
-│   ├── style.css                # Custom styling for the Streamlit dashboard
-│   ├── ingest.py                # Parses downloaded HTML paystubs to the database
-│   ├── paystubs.py              # Playwright script to automate downloading paystubs
-│   └── requirements-server.txt  # Dependencies for the desktop dashboard/server
-│
-├── Mobile App (Flet)
+├── mobile/                      # Mobile App (Flet)
 │   ├── mobile_app.py            # The Android/Mobile app UI and logic
 │   ├── version.json             # Used by the mobile app to check for OTA updates
 │   └── requirements.txt         # Dependencies strictly for building the mobile app
 │
-├── Configuration & Data
-│   ├── .env                     # Your credentials and 2FA secrets (Keep private!)
+├── server/                      # Desktop Server & Dashboard
+│   ├── dashboard.py             # Main Streamlit visualization app
+│   ├── listener.py              # Local API server (Port 5000) for the mobile app
+│   ├── debug_ingest.py          # One-off debug script for ingestion testing
+│   ├── debug_login.py           # One-off debug script for login testing
+│   ├── requirements-server.txt  # Dependencies for the desktop dashboard/server
+│   └── src/                     # Core reusable modules
+│       ├── logic.py             # Core math, payroll rules, and audit logic
+│       ├── models.py            # Database queries and table setup
+│       ├── views.py             # UI rendering and HTML generation for the dashboard
+│       ├── style.css            # Custom styling for the Streamlit dashboard
+│       ├── ingest.py            # Parses downloaded HTML paystubs to the database
+│       └── paystubs.py          # Playwright script to automate downloading paystubs
+│
+├── data/                        # Configuration & Data
 │   ├── holidays.json            # Holiday reference dates
 │   └── PayStubs/                # Directory where HTML paystubs are saved
 │
+├── .gitignore                   # Tells git which files/folders to ignore
+│
 └── Auto-Generated (Not tracked in git)
+    ├── .env                     # Your credentials and 2FA secrets (Keep private!)
     ├── payroll_audit.db         # Desktop database
     └── mobile_data.db           # Mobile app database
 ```
