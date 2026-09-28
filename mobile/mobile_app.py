@@ -15,52 +15,54 @@ else:
     DB_NAME = "mobile_data.db"
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_NAME, timeout=10)
     c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS offline_queue (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            day_date TEXT,
-            start_time TEXT,
-            end_time TEXT,
-            leave_type TEXT,
-            ojti_hours REAL,
-            cic_hours REAL,
-            timestamp TEXT
-        )
-    ''')
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS schedule_defaults (
-            year INTEGER,
-            day_idx INTEGER,
-            start_time TEXT,
-            end_time TEXT,
-            PRIMARY KEY (year, day_idx)
-        )
-    ''')
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS holiday_cache (
-            year INTEGER,
-            name TEXT,
-            date TEXT,
-            day TEXT
-        )
-    ''')
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS server_actuals (
-            day_date TEXT PRIMARY KEY,
-            start_time TEXT,
-            end_time TEXT,
-            leave_type TEXT,
-            ojti_hours REAL,
-            cic_hours REAL
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    try:
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS offline_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                day_date TEXT,
+                start_time TEXT,
+                end_time TEXT,
+                leave_type TEXT,
+                ojti_hours REAL,
+                cic_hours REAL,
+                timestamp TEXT
+            )
+        ''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS schedule_defaults (
+                year INTEGER,
+                day_idx INTEGER,
+                start_time TEXT,
+                end_time TEXT,
+                PRIMARY KEY (year, day_idx)
+            )
+        ''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS holiday_cache (
+                year INTEGER,
+                name TEXT,
+                date TEXT,
+                day TEXT
+            )
+        ''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS server_actuals (
+                day_date TEXT PRIMARY KEY,
+                start_time TEXT,
+                end_time TEXT,
+                leave_type TEXT,
+                ojti_hours REAL,
+                cic_hours REAL
+            )
+        ''')
+        conn.commit()
+    finally:
+        conn.close()
 
 def main(page: ft.Page):
-    APP_VERSION = "1.2"
+    APP_VERSION = "1.2.9"
     UPDATE_URL = "https://raw.githubusercontent.com/shaslip/faa-paytracker/main/mobile/version.json"
     page.title = "FAA PayTracker"
     page.theme_mode = ft.ThemeMode.LIGHT
@@ -183,14 +185,15 @@ def main(page: ft.Page):
         target_year = new_date.year
         date_str = txt_date.value
         
-        conn = sqlite3.connect(DB_NAME)
+        conn = sqlite3.connect(DB_NAME, timeout=10)
         conn.row_factory = sqlite3.Row 
         
-        row_q = conn.execute("SELECT * FROM offline_queue WHERE day_date=?", (date_str,)).fetchone()
-        row_act = conn.execute("SELECT * FROM server_actuals WHERE day_date=?", (date_str,)).fetchone()
-        row_def = conn.execute("SELECT start_time, end_time FROM schedule_defaults WHERE year=? AND day_idx=?", (target_year, day_idx)).fetchone()
-        
-        conn.close()
+        try:
+            row_q = conn.execute("SELECT * FROM offline_queue WHERE day_date=?", (date_str,)).fetchone()
+            row_act = conn.execute("SELECT * FROM server_actuals WHERE day_date=?", (date_str,)).fetchone()
+            row_def = conn.execute("SELECT start_time, end_time FROM schedule_defaults WHERE year=? AND day_idx=?", (target_year, day_idx)).fetchone()
+        finally:
+            conn.close()
 
         if row_q:
             txt_start.value = row_q['start_time'] if row_q['start_time'] else ""
@@ -273,14 +276,16 @@ def main(page: ft.Page):
             if s_val and len(s_val) != 5: raise ValueError("Start Time must be HH:MM")
             if e_val and len(e_val) != 5: raise ValueError("End Time must be HH:MM")
 
-            conn = sqlite3.connect(DB_NAME)
-            conn.execute("""
-                INSERT INTO offline_queue 
-                (day_date, start_time, end_time, leave_type, ojti_hours, cic_hours, timestamp) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (txt_date.value, s_val, e_val, leave_val, ojti, cic, datetime.now().isoformat()))
-            conn.commit()
-            conn.close()
+            conn = sqlite3.connect(DB_NAME, timeout=10)
+            try:
+                conn.execute("""
+                    INSERT INTO offline_queue 
+                    (day_date, start_time, end_time, leave_type, ojti_hours, cic_hours, timestamp) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (txt_date.value, s_val, e_val, leave_val, ojti, cic, datetime.now().isoformat()))
+                conn.commit()
+            finally:
+                conn.close()
 
             lbl_status.value = f"Saved {txt_date.value}"
             lbl_status.color = "green"
@@ -296,24 +301,26 @@ def main(page: ft.Page):
         lbl_status.value = "Syncing Shifts..."
         page.update()
         try:
-            conn = sqlite3.connect(DB_NAME)
+            conn = sqlite3.connect(DB_NAME, timeout=10)
             conn.row_factory = sqlite3.Row
-            rows = conn.execute("SELECT * FROM offline_queue").fetchall()
-            
-            if rows:
-                payload = [dict(r) for r in rows]
-                r = requests.post(f"{get_url()}/mobile_sync", json=payload, timeout=5)
-                if r.status_code == 200:
-                    conn.execute("DELETE FROM offline_queue")
-                    conn.commit()
-                    lbl_status.value = f"Synced {len(rows)} entries."
-                    lbl_status.color = "green"
+            try:
+                rows = conn.execute("SELECT * FROM offline_queue").fetchall()
+                
+                if rows:
+                    payload = [dict(r) for r in rows]
+                    r = requests.post(f"{get_url()}/mobile_sync", json=payload, timeout=5)
+                    if r.status_code == 200:
+                        conn.execute("DELETE FROM offline_queue")
+                        conn.commit()
+                        lbl_status.value = f"Synced {len(rows)} entries."
+                        lbl_status.color = "green"
+                    else:
+                        lbl_status.value = f"Server Error: {r.status_code}"
+                        lbl_status.color = "red"
                 else:
-                    lbl_status.value = f"Server Error: {r.status_code}"
-                    lbl_status.color = "red"
-            else:
-                lbl_status.value = "Queue empty."
-            conn.close()
+                    lbl_status.value = "Queue empty."
+            finally:
+                conn.close()
             
             load_pending_queue()
             
@@ -326,37 +333,44 @@ def main(page: ft.Page):
         lbl_status.value = "Downloading Data..."
         page.update()
         try:
-            # 1. Defaults
+            # 1. Fetch ALL data first (Don't lock the database yet!)
             r_sched = requests.get(f"{get_url()}/get_schedule_defaults", timeout=5)
-            conn = sqlite3.connect(DB_NAME)
-            if r_sched.status_code == 200:
-                conn.execute("DELETE FROM schedule_defaults")
-                for i in r_sched.json():
-                    conn.execute("INSERT INTO schedule_defaults VALUES (?,?,?,?)", 
-                                 (i['year'], i['day'], i['start'], i['end']))
-            
-            # 2. Saved Shifts
             r_shifts = requests.get(f"{get_url()}/get_saved_shifts?year={datetime.now().year}", timeout=5)
-            if r_shifts.status_code == 200:
-                conn.execute("DELETE FROM server_actuals")
-                for s in r_shifts.json():
-                    conn.execute("""
-                        INSERT INTO server_actuals (day_date, start_time, end_time, leave_type, ojti_hours, cic_hours)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (s['date'], s['start'], s['end'], s['leave'], s['ojti'], s['cic']))
-
-            # 3. Holidays
-            conn.execute("DELETE FROM holiday_cache")
+            
+            holidays = []
             years = [datetime.now().year, datetime.now().year + 1]
             for y in years:
                 r_hol = requests.get(f"{get_url()}/get_holidays?year={y}", timeout=5)
                 if r_hol.status_code == 200:
-                    for h in r_hol.json():
+                    holidays.extend(r_hol.json())
+
+            # 2. Now that network calls are done, open DB and write quickly
+            conn = sqlite3.connect(DB_NAME, timeout=10)
+            try:
+                if r_sched.status_code == 200:
+                    conn.execute("DELETE FROM schedule_defaults")
+                    for i in r_sched.json():
+                        conn.execute("INSERT INTO schedule_defaults VALUES (?,?,?,?)", 
+                                     (i['year'], i['day'], i['start'], i['end']))
+                
+                if r_shifts.status_code == 200:
+                    conn.execute("DELETE FROM server_actuals")
+                    for s in r_shifts.json():
+                        conn.execute("""
+                            INSERT INTO server_actuals (day_date, start_time, end_time, leave_type, ojti_hours, cic_hours)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (s['date'], s['start'], s['end'], s['leave'], s['ojti'], s['cic']))
+
+                if holidays:  # Only delete and overwrite if we actually got data!
+                    conn.execute("DELETE FROM holiday_cache")
+                    for h in holidays:
                         conn.execute("INSERT INTO holiday_cache VALUES (?,?,?,?)", 
                                      (h['year'], h['name'], h['date'], h['day']))
-            
-            conn.commit()
-            conn.close()
+                
+                conn.commit()
+            finally:
+                conn.close()
+
             lbl_status.value = "Updates Downloaded!"
             lbl_status.color = "green"
             
@@ -402,12 +416,14 @@ def main(page: ft.Page):
     )
 
     def load_holidays_from_db():
-        conn = sqlite3.connect(DB_NAME)
-        rows = conn.execute(
-            "SELECT name, date, day FROM holiday_cache WHERE year >= ? ORDER BY date", 
-            (datetime.now().year,)
-        ).fetchall()
-        conn.close()
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        try:
+            rows = conn.execute(
+                "SELECT name, date, day FROM holiday_cache WHERE year >= ? ORDER BY date", 
+                (datetime.now().year,)
+            ).fetchall()
+        finally:
+            conn.close()
         
         holiday_table.rows.clear()
         for name, date, day in rows:
@@ -447,10 +463,12 @@ def main(page: ft.Page):
     )
 
     def load_pending_queue():
-        conn = sqlite3.connect(DB_NAME)
-        # Fetch everything exactly as it is in the queue
-        rows = conn.execute("SELECT day_date, start_time, end_time, leave_type, ojti_hours, cic_hours FROM offline_queue ORDER BY day_date DESC").fetchall()
-        conn.close()
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        try:
+            # Fetch everything exactly as it is in the queue
+            rows = conn.execute("SELECT day_date, start_time, end_time, leave_type, ojti_hours, cic_hours FROM offline_queue ORDER BY day_date DESC").fetchall()
+        finally:
+            conn.close()
 
         pending_table.rows.clear()
         
