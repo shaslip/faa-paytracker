@@ -43,7 +43,6 @@ def init_db():
                 leave_type TEXT, ojti_hours REAL, cic_hours REAL
             )
         ''')
-        # --- NEW TABLES FOR PAYSTUB & YTD ---
         c.execute('''
             CREATE TABLE IF NOT EXISTS paystub_summary (
                 type TEXT, label TEXT, value1 REAL, value2 TEXT
