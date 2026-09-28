@@ -36,7 +36,10 @@ jobs:
       # Added: 'yes |' automatically answers 'y' to the installation prompt
       - name: Build APK
         working-directory: ./mobile
-        run: yes | flet build apk --project "Audit FAA" --module-name mobile_app
+        run: |
+          # Strip the 'v' from the tag (e.g., v1.2.3 becomes 1.2.3)
+          VERSION=${GITHUB_REF_NAME#v}
+          yes | flet build apk --project "Audit FAA" --module-name mobile_app --build-version $VERSION
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
