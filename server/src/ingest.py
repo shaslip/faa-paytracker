@@ -203,7 +203,7 @@ def parse_html_paystub(html_content, filename, conn):
 
 if __name__ == "__main__":
     db_conn = setup_database()
-    paystubs_dir = os.path.join(os.getcwd(), "PayStubs")
+    paystubs_dir = os.path.join(base_dir, "data", "PayStubs")
 
     if not os.path.exists(paystubs_dir):
         print(f"Error: Directory '{paystubs_dir}' not found.")
