@@ -4,7 +4,8 @@ from bs4 import BeautifulSoup
 import os
 
 # --- Configuration ---
-DB_NAME = 'payroll_audit.db'
+base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DB_NAME = os.path.join(base_dir, 'payroll_audit.db')
 
 def setup_database():
     conn = sqlite3.connect(DB_NAME)
