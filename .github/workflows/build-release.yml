@@ -32,12 +32,6 @@ jobs:
           flutter-version: '3.24.3'
           channel: 'stable'
 
-      - name: Cache Android Keystore
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: android-keystore
-
       - name: Install Flet
         run: |
           python -m pip install --upgrade pip
@@ -50,8 +44,18 @@ jobs:
           VERSION=${GITHUB_REF_NAME#v}
           yes | flet build apk --project "Audit FAA" --module-name mobile_app --build-version $VERSION
 
+      - name: Sign APK
+        uses: r0adkll/sign-android-release@v1
+        id: sign_app
+        with:
+          releaseDirectory: mobile/build/apk
+          signingKeyBase64: ${{ secrets.KEYSTORE_BASE64 }}
+          alias: ${{ secrets.KEY_ALIAS }}
+          keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.KEYSTORE_PASSWORD }}
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: mobile/build/apk/*.apk
+          files: ${{steps.sign_app.outputs.signedReleaseFile}}
           generate_release_notes: true
