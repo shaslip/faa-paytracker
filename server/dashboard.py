@@ -939,23 +939,23 @@ with tab_bid:
     st.header("⚖️ Schedule Bid Calculator")
     st.info("Compare how different weekly schedules affect your Night and Sunday differential pay. Calculations are based on a standard 14-day pay period (excluding holidays) and annualized (x26).")
     
-    # 1. Initialize State
+    # 1. Initialize State (Clean naming: Option 1, Option 2, etc.)
     if 'bids' not in st.session_state:
-        # Load current schedule as a baseline
+        # Load current schedule as a baseline for Option 1
         curr_sched = models.get_user_schedule(datetime.now().year)
         days_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
         curr_sched['Day'] = curr_sched['day_of_week'].map(days_map)
         curr_sched = curr_sched[['Day', 'start_time', 'end_time', 'day_of_week']]
         
-        st.session_state['bids'] = {"Current Schedule": curr_sched.copy()}
-        st.session_state['bid_counter'] = 1
+        st.session_state['bids'] = {"Option 1": curr_sched.copy()}
+        st.session_state['bid_counter'] = 2
         
     # 2. Top Controls
     c1, c2 = st.columns([1, 4])
     with c1:
         if st.button("➕ Add Bid Option"):
             new_name = f"Option {st.session_state['bid_counter']}"
-            blank_sched = st.session_state['bids']["Current Schedule"].copy()
+            blank_sched = st.session_state['bids']["Option 1"].copy()
             blank_sched['start_time'] = None
             blank_sched['end_time'] = None
             st.session_state['bids'][new_name] = blank_sched
@@ -1013,19 +1013,27 @@ with tab_bid:
             st.warning("No paystubs found. Using $50.00/hr as a default base rate.")
             
         # Dummy 14-day pay period with NO holidays (Aug 11, 2024 to Aug 24, 2024)
-        # Aug 11 is a Sunday (start of federal PP)
         dummy_dates = [(datetime(2024, 8, 11) + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(14)]
         
-        results = []
+        # Setup the transposed table structure (Metrics down the first column)
+        metrics = [
+            "Night Hours (PP)", 
+            "Sunday Hours (PP)", 
+            "Night Pay (PP)", 
+            "Sunday Pay (PP)", 
+            "Total Differential (PP)", 
+            "Projected Annual 🏆"
+        ]
+        table_data = {"Metric": metrics}
         
         for name, bid_df in st.session_state['bids'].items():
             calc_sched = bid_df.copy()
             
-            # 1. Clean pandas NaNs into pure None types so logic.py doesn't crash on floats
+            # Clean pandas NaNs into pure None types so logic.py doesn't crash on floats
             calc_sched['start_time'] = calc_sched['start_time'].where(pd.notna(calc_sched['start_time']), None)
             calc_sched['end_time'] = calc_sched['end_time'].where(pd.notna(calc_sched['end_time']), None)
             
-            # 2. Format for logic.py (needs index as day_of_week, and is_workday boolean)
+            # Format for logic.py (needs index as day_of_week, and is_workday boolean)
             def check_workday(val):
                 if val is None: return 0
                 v = str(val).strip().lower()
@@ -1071,38 +1079,22 @@ with tab_bid:
             pp_total = night_pay + sun_pay
             annual_total = pp_total * 26
             
-            results.append({
-                "Bid Option": name,
-                "Night Hrs (PP)": t_night,
-                "Sunday Hrs (PP)": t_sun,
-                "Night Pay (PP)": night_pay,
-                "Sunday Pay (PP)": sun_pay,
-                "Total Diff (PP)": pp_total,
-                "Projected Annual": annual_total
-            })
+            # Append this option's results to the table as formatted strings
+            table_data[name] = [
+                f"{t_night:.2f}",
+                f"{t_sun:.2f}",
+                f"${night_pay:,.2f}",
+                f"${sun_pay:,.2f}",
+                f"${pp_total:,.2f}",
+                f"${annual_total:,.2f}"
+            ]
             
-        res_df = pd.DataFrame(results)
+        res_df = pd.DataFrame(table_data)
         
         st.subheader(f"Comparison Results (Estimated Base Rate: ${ref_rate:,.2f}/hr)")
         
-        # Highlight max value in the table
-        def highlight_max(s):
-            is_max = s == s.max()
-            return ['background-color: #27ae60; color: white;' if v else '' for v in is_max]
-        
         st.dataframe(
-            res_df.style.apply(highlight_max, subset=['Projected Annual']),
+            res_df,
             hide_index=True,
-            width="stretch",
-            column_config={
-                "Night Hrs (PP)": st.column_config.NumberColumn(format="%.2f"),
-                "Sunday Hrs (PP)": st.column_config.NumberColumn(format="%.2f"),
-                "Night Pay (PP)": st.column_config.NumberColumn(format="$%.2f"),
-                "Sunday Pay (PP)": st.column_config.NumberColumn(format="$%.2f"),
-                "Total Diff (PP)": st.column_config.NumberColumn("Total Diff (PP)", format="$%.2f"),
-                "Projected Annual": st.column_config.NumberColumn("Projected Annual 🏆", format="$%.2f")
-            }
+            width="stretch"
         )
-        
-        # Comparison Bar Chart
-        st.bar_chart(res_df.set_index("Bid Option")["Projected Annual"], color="#2e86c1")
