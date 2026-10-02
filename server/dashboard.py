@@ -1041,11 +1041,18 @@ with tab_bid:
                     s_raw = row['start_time']
                     e_raw = row['end_time']
                     
-                    s_val = str(s_raw).strip()
-                    e_val = str(e_raw).strip()
-                    
-                    s_obj = pd.to_datetime(s_val, format='%H:%M').time() if s_val and s_val != "None" else None
-                    e_obj = pd.to_datetime(e_val, format='%H:%M').time() if e_val and e_val != "None" else None
+                    # Safe parsing helper to handle None, NaN, and empty strings
+                    def parse_time(val):
+                        if pd.isna(val): return None
+                        val_str = str(val).strip().lower()
+                        if not val_str or val_str in ["none", "nan", "nat"]: return None
+                        try:
+                            return pd.to_datetime(val_str, format='%H:%M').time()
+                        except Exception:
+                            return None
+                            
+                    s_obj = parse_time(s_raw)
+                    e_obj = parse_time(e_raw)
                     
                     # Pass through existing logic to grab exact hours
                     b = logic.calculate_daily_breakdown(d_str, s_obj, e_obj, None, 0, 0, calc_sched)
