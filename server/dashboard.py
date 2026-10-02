@@ -1018,11 +1018,13 @@ with tab_bid:
         # Setup the transposed table structure (Metrics down the first column)
         metrics = [
             "Night Hours (PP)", 
+            "Night Pay (PP)",
+            "Night Pay (Annual)",
             "Sunday Hours (PP)", 
-            "Night Pay (PP)", 
             "Sunday Pay (PP)", 
-            "Total Differential (PP)", 
-            "Projected Annual 🏆"
+            "Sunday Pay (Annual)",
+            "Total Diff (PP)", 
+            "Total Diff (Annual)"
         ]
         table_data = {"Metric": metrics}
         
@@ -1075,16 +1077,22 @@ with tab_bid:
                     
             # Financial Math
             night_pay = t_night * (ref_rate * 0.10)
+            night_annual = night_pay * 26
+            
             sun_pay = t_sun * (ref_rate * 0.25)
+            sun_annual = sun_pay * 26
+            
             pp_total = night_pay + sun_pay
             annual_total = pp_total * 26
             
             # Append this option's results to the table as formatted strings
             table_data[name] = [
                 f"{t_night:.2f}",
-                f"{t_sun:.2f}",
                 f"${night_pay:,.2f}",
+                f"${night_annual:,.2f}",
+                f"{t_sun:.2f}",
                 f"${sun_pay:,.2f}",
+                f"${sun_annual:,.2f}",
                 f"${pp_total:,.2f}",
                 f"${annual_total:,.2f}"
             ]
@@ -1093,8 +1101,14 @@ with tab_bid:
         
         st.subheader(f"Comparison Results (Estimated Base Rate: ${ref_rate:,.2f}/hr)")
         
+        # Highlight "Annual" rows with a semi-transparent gray (works in both light/dark mode)
+        def highlight_annual(row):
+            if "(Annual)" in row['Metric']:
+                return ['background-color: rgba(128, 128, 128, 0.2)'] * len(row)
+            return [''] * len(row)
+        
         st.dataframe(
-            res_df,
+            res_df.style.apply(highlight_annual, axis=1),
             hide_index=True,
             width="stretch"
         )
