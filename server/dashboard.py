@@ -1021,10 +1021,15 @@ with tab_bid:
         for name, bid_df in st.session_state['bids'].items():
             calc_sched = bid_df.copy()
             
-            # Format for logic.py (needs index as day_of_week, and is_workday boolean)
+            # 1. Clean pandas NaNs into pure None types so logic.py doesn't crash on floats
+            calc_sched['start_time'] = calc_sched['start_time'].where(pd.notna(calc_sched['start_time']), None)
+            calc_sched['end_time'] = calc_sched['end_time'].where(pd.notna(calc_sched['end_time']), None)
+            
+            # 2. Format for logic.py (needs index as day_of_week, and is_workday boolean)
             def check_workday(val):
-                v = str(val).strip()
-                return 1 if v and v != "None" else 0
+                if val is None: return 0
+                v = str(val).strip().lower()
+                return 1 if v and v not in ["none", "nan", ""] else 0
                 
             calc_sched['is_workday'] = calc_sched['start_time'].apply(check_workday)
             calc_sched = calc_sched.set_index('day_of_week')
