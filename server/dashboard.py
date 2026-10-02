@@ -1099,7 +1099,7 @@ with tab_bid:
             
         res_df = pd.DataFrame(table_data)
         
-        st.subheader(f"Comparison Results (Estimated Base Rate: ${ref_rate:,.2f}/hr)")
+        st.subheader("Comparison Results")
         
         # Highlight "Annual" rows with a semi-transparent gray (works in both light/dark mode)
         def highlight_annual(row):
