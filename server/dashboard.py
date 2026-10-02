@@ -68,7 +68,14 @@ st.set_page_config(page_title="FAA PayTracker", layout="wide")
 st.markdown(views.get_css(), unsafe_allow_html=True)
 models.setup_database()
 
-tab_audit, tab_graphs, tab_ytd, tab_facts, tab_ingest = st.tabs(["🧐 Audit & Time", "📊 Statistics & Graphs", "📅 YTD in detail", "ℹ️ Basic Facts", "📥 Ingestion"])
+tab_audit, tab_graphs, tab_ytd, tab_facts, tab_ingest, tab_bid = st.tabs([
+    "🧐 Audit & Time", 
+    "📊 Statistics & Graphs", 
+    "📅 YTD in detail", 
+    "ℹ️ Basic Facts", 
+    "📥 Ingestion", 
+    "⚖️ Bid Calculator"
+])
 
 # --- TAB: AUDIT ---
 with tab_audit:
@@ -926,3 +933,164 @@ with tab_ingest:
                     
                 with st.expander("View Scan Log", expanded=False):
                     st.text(full_log if full_log.strip() else "No output generated.")
+
+# --- TAB: BID CALCULATOR ---
+with tab_bid:
+    st.header("⚖️ Schedule Bid Calculator")
+    st.info("Compare how different weekly schedules affect your Night and Sunday differential pay. Calculations are based on a standard 14-day pay period (excluding holidays) and annualized (x26).")
+    
+    # 1. Initialize State
+    if 'bids' not in st.session_state:
+        # Load current schedule as a baseline
+        curr_sched = models.get_user_schedule(datetime.now().year)
+        days_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
+        curr_sched['Day'] = curr_sched['day_of_week'].map(days_map)
+        curr_sched = curr_sched[['Day', 'start_time', 'end_time', 'day_of_week']]
+        
+        st.session_state['bids'] = {"Current Schedule": curr_sched.copy()}
+        st.session_state['bid_counter'] = 1
+        
+    # 2. Top Controls
+    c1, c2 = st.columns([1, 4])
+    with c1:
+        if st.button("➕ Add Bid Option"):
+            new_name = f"Option {st.session_state['bid_counter']}"
+            blank_sched = st.session_state['bids']["Current Schedule"].copy()
+            blank_sched['start_time'] = None
+            blank_sched['end_time'] = None
+            st.session_state['bids'][new_name] = blank_sched
+            st.session_state['bid_counter'] += 1
+            st.rerun()
+    with c2:
+        if st.button("🗑️ Reset Options"):
+            del st.session_state['bids']
+            st.rerun()
+            
+    st.divider()
+    
+    # 3. Render Grid of Editors
+    st.subheader("Define Schedules (HH:MM)")
+    time_regex = r"^$|^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
+    
+    bid_names = list(st.session_state['bids'].keys())
+    updated_bids = {}
+    
+    # Display max 3 editors per row to avoid squishing columns
+    cols_per_row = 3
+    for i in range(0, len(bid_names), cols_per_row):
+        cols = st.columns(cols_per_row)
+        for j in range(cols_per_row):
+            if i + j < len(bid_names):
+                name = bid_names[i+j]
+                with cols[j]:
+                    st.markdown(f"**{name}**")
+                    edited = st.data_editor(
+                        st.session_state['bids'][name],
+                        hide_index=True,
+                        width="stretch",
+                        column_config={
+                            "day_of_week": None,
+                            "Day": st.column_config.TextColumn(disabled=True),
+                            "start_time": st.column_config.TextColumn("Start", validate=time_regex),
+                            "end_time": st.column_config.TextColumn("End", validate=time_regex)
+                        },
+                        key=f"bid_editor_{name}"
+                    )
+                    updated_bids[name] = edited
+                    
+    st.session_state['bids'] = updated_bids
+    
+    st.divider()
+    
+    # 4. Calculation Engine
+    if st.button("🚀 Calculate & Compare Differentials", type="primary"):
+        # Fetch base rate from most recent stub
+        stubs = models.get_paystubs_meta()
+        if not stubs.empty:
+            ref_rate, _, _ = models.get_reference_data(stubs.iloc[0]['id'])
+        else:
+            ref_rate = 50.00
+            st.warning("No paystubs found. Using $50.00/hr as a default base rate.")
+            
+        # Dummy 14-day pay period with NO holidays (Aug 11, 2024 to Aug 24, 2024)
+        # Aug 11 is a Sunday (start of federal PP)
+        dummy_dates = [(datetime(2024, 8, 11) + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(14)]
+        
+        results = []
+        
+        for name, bid_df in st.session_state['bids'].items():
+            calc_sched = bid_df.copy()
+            
+            # Format for logic.py (needs index as day_of_week, and is_workday boolean)
+            def check_workday(val):
+                v = str(val).strip()
+                return 1 if v and v != "None" else 0
+                
+            calc_sched['is_workday'] = calc_sched['start_time'].apply(check_workday)
+            calc_sched = calc_sched.set_index('day_of_week')
+            
+            t_night = 0.0
+            t_sun = 0.0
+            
+            for d_str in dummy_dates:
+                dt = datetime.strptime(d_str, "%Y-%m-%d")
+                wd = dt.weekday()
+                
+                if wd in calc_sched.index:
+                    row = calc_sched.loc[wd]
+                    s_raw = row['start_time']
+                    e_raw = row['end_time']
+                    
+                    s_val = str(s_raw).strip()
+                    e_val = str(e_raw).strip()
+                    
+                    s_obj = pd.to_datetime(s_val, format='%H:%M').time() if s_val and s_val != "None" else None
+                    e_obj = pd.to_datetime(e_val, format='%H:%M').time() if e_val and e_val != "None" else None
+                    
+                    # Pass through existing logic to grab exact hours
+                    b = logic.calculate_daily_breakdown(d_str, s_obj, e_obj, None, 0, 0, calc_sched)
+                    
+                    t_night += b['Night']
+                    t_sun += b['Sunday']
+                    
+            # Financial Math
+            night_pay = t_night * (ref_rate * 0.10)
+            sun_pay = t_sun * (ref_rate * 0.25)
+            pp_total = night_pay + sun_pay
+            annual_total = pp_total * 26
+            
+            results.append({
+                "Bid Option": name,
+                "Night Hrs (PP)": t_night,
+                "Sunday Hrs (PP)": t_sun,
+                "Night Pay (PP)": night_pay,
+                "Sunday Pay (PP)": sun_pay,
+                "Total Diff (PP)": pp_total,
+                "Projected Annual": annual_total
+            })
+            
+        res_df = pd.DataFrame(results)
+        
+        st.subheader(f"Comparison Results (Estimated Base Rate: ${ref_rate:,.2f}/hr)")
+        
+        # Highlight max value in the table
+        def highlight_max(s):
+            is_max = s == s.max()
+            return ['background-color: #27ae60; color: white;' if v else '' for v in is_max]
+        
+        st.dataframe(
+            res_df.style.apply(highlight_max, subset=['Projected Annual']),
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "Night Hrs (PP)": st.column_config.NumberColumn(format="%.2f"),
+                "Sunday Hrs (PP)": st.column_config.NumberColumn(format="%.2f"),
+                "Night Pay (PP)": st.column_config.NumberColumn(format="$%.2f"),
+                "Sunday Pay (PP)": st.column_config.NumberColumn(format="$%.2f"),
+                "Total Diff (PP)": st.column_config.NumberColumn("Total Diff (PP)", format="$%.2f"),
+                "Projected Annual": st.column_config.NumberColumn("Projected Annual 🏆", format="$%.2f")
+            }
+        )
+        
+        # Comparison Bar Chart
+        st.bar_chart(res_df.set_index("Bid Option")["Projected Annual"], color="#2e86c1")
