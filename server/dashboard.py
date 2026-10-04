@@ -998,7 +998,7 @@ with tab_bid:
                     )
                     updated_bids[name] = edited
                     
-    st.session_state['bids'] = updated_bids
+    # REMOVED: st.session_state['bids'] = updated_bids (Prevents typing lag/overwrite)
     
     st.divider()
     
@@ -1023,12 +1023,14 @@ with tab_bid:
             "Sunday Hours (PP)", 
             "Sunday Pay (PP)", 
             "Sunday Pay (Annual)",
+            "AWS Hol Bonus (Annual)",
             "Total Diff (PP)", 
             "Total Diff (Annual)"
         ]
         table_data = {"Metric": metrics}
         
-        for name, bid_df in st.session_state['bids'].items():
+        # Iterate over updated_bids so we use the live editor data
+        for name, bid_df in updated_bids.items():
             calc_sched = bid_df.copy()
             
             # Clean pandas NaNs into pure None types so logic.py doesn't crash on floats
@@ -1042,6 +1044,10 @@ with tab_bid:
                 return 1 if v and v not in ["none", "nan", ""] else 0
                 
             calc_sched['is_workday'] = calc_sched['start_time'].apply(check_workday)
+            
+            # Check if this is a 4-day compressed schedule (AWS)
+            is_aws = calc_sched['is_workday'].sum() == 4
+            
             calc_sched = calc_sched.set_index('day_of_week')
             
             t_night = 0.0
@@ -1082,8 +1088,11 @@ with tab_bid:
             sun_pay = t_sun * (ref_rate * 0.25)
             sun_annual = sun_pay * 26
             
+            # 11 National Holidays * 2 extra hours per holiday * base rate
+            aws_bonus_annual = (11 * 2 * ref_rate) if is_aws else 0.0
+            
             pp_total = night_pay + sun_pay
-            annual_total = pp_total * 26
+            annual_total = (pp_total * 26) + aws_bonus_annual
             
             # Append this option's results to the table as formatted strings
             table_data[name] = [
@@ -1093,6 +1102,7 @@ with tab_bid:
                 f"{t_sun:.2f}",
                 f"${sun_pay:,.2f}",
                 f"${sun_annual:,.2f}",
+                f"${aws_bonus_annual:,.2f}",
                 f"${pp_total:,.2f}",
                 f"${annual_total:,.2f}"
             ]
