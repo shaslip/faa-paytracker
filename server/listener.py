@@ -278,6 +278,23 @@ async def get_paystubs_summary():
     
     return {"history": history, "leave": leave_data, "projected": projected, "base_rate": ref_rate}
 
+@app.get("/get_available_years")
+async def get_available_years():
+    """
+    Returns a list of all years that actually have paystub data.
+    """
+    stubs = models.get_paystubs_meta()
+    if stubs.empty:
+        return [datetime.now().year]
+    
+    # Use pay_date to determine the tax year
+    stubs['year'] = pd.to_datetime(stubs['pay_date'], errors='coerce').dt.year
+    years = sorted(stubs['year'].dropna().unique().astype(int).tolist())
+    
+    if not years:
+        return [datetime.now().year]
+    return years
+
 @app.get("/get_ytd_stats")
 async def get_ytd_stats(year: Optional[int] = None):
     """
