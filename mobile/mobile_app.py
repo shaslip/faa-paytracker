@@ -53,12 +53,17 @@ def init_db():
                 year INTEGER, category TEXT, type TEXT, amount REAL, hours REAL
             )
         ''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS available_years (
+                year INTEGER PRIMARY KEY
+            )
+        ''')
         conn.commit()
     finally:
         conn.close()
 
 def main(page: ft.Page):
-    APP_VERSION = "1.3.4"
+    APP_VERSION = "1.3.5"
     UPDATE_URL = "https://raw.githubusercontent.com/shaslip/faa-paytracker/main/mobile/version.json"
     page.title = "FAA PayTracker"
     page.theme_mode = ft.ThemeMode.LIGHT
@@ -327,9 +332,15 @@ def main(page: ft.Page):
                 r_shifts = requests.get(f"{get_url()}/get_saved_shifts?year={datetime.now().year}", timeout=5)
                 r_summary = requests.get(f"{get_url()}/get_paystubs_summary", timeout=5)
                 
-                # Fetch YTD for all relevant years (2023 to current year)
+                # --- NEW: Fetch available years ---
+                r_years = requests.get(f"{get_url()}/get_available_years", timeout=5)
+                available_years = [datetime.now().year]
+                if r_years.status_code == 200:
+                    available_years = r_years.json()
+                
+                # Fetch YTD for all dynamic years
                 ytd_data_by_year = {}
-                for y in range(2023, datetime.now().year + 1):
+                for y in available_years:
                     r_ytd = requests.get(f"{get_url()}/get_ytd_stats?year={y}", timeout=5)
                     if r_ytd.status_code == 200:
                         ytd_data_by_year[y] = r_ytd.json()
@@ -342,6 +353,13 @@ def main(page: ft.Page):
                         holidays.extend(r_hol.json())
 
                 # 3. WRITE downloaded data
+                
+                # --- Save available years ---
+                if r_years.status_code == 200:
+                    conn.execute("DELETE FROM available_years")
+                    for y in available_years:
+                        conn.execute("INSERT INTO available_years VALUES (?)", (y,))
+                        
                 if r_sched.status_code == 200:
                     conn.execute("DELETE FROM schedule_defaults")
                     for i in r_sched.json():
@@ -550,19 +568,33 @@ def main(page: ft.Page):
         width=400
     )
 
-    current_year = datetime.now().year
+    # Remove the hardcoded options; they will be populated dynamically
     dd_ytd_year = ft.Dropdown(
         label="Year",
-        options=[ft.dropdown.Option(str(y)) for y in range(2023, current_year + 1)],
-        value=str(current_year),
         width=100,
         on_change=lambda e: load_ytd_summary()
     )
 
     def load_ytd_summary():
-        selected_year = int(dd_ytd_year.value) if dd_ytd_year.value else datetime.now().year
         conn = sqlite3.connect(DB_NAME, timeout=10)
         try:
+            # 1. Dynamically populate the Dropdown based on synced data
+            years_rows = conn.execute("SELECT year FROM available_years ORDER BY year DESC").fetchall()
+            avail_years = [r[0] for r in years_rows]
+            
+            # Fallback if app hasn't synced yet
+            if not avail_years:
+                avail_years = [datetime.now().year]
+                
+            dd_ytd_year.options = [ft.dropdown.Option(str(y)) for y in avail_years]
+            
+            # Auto-select the newest year if nothing is selected yet
+            if not dd_ytd_year.value or int(dd_ytd_year.value) not in avail_years:
+                dd_ytd_year.value = str(avail_years[0])
+                
+            selected_year = int(dd_ytd_year.value)
+            
+            # 2. Load the actual data for the selected year
             rows = conn.execute("SELECT category, type, amount, hours FROM ytd_stats WHERE year=?", (selected_year,)).fetchall()
         finally:
             conn.close()
