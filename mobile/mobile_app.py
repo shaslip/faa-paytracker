@@ -326,7 +326,13 @@ def main(page: ft.Page):
                 r_sched = requests.get(f"{get_url()}/get_schedule_defaults", timeout=5)
                 r_shifts = requests.get(f"{get_url()}/get_saved_shifts?year={datetime.now().year}", timeout=5)
                 r_summary = requests.get(f"{get_url()}/get_paystubs_summary", timeout=5)
-                r_ytd = requests.get(f"{get_url()}/get_ytd_stats?year={datetime.now().year}", timeout=5)
+                
+                # Fetch YTD for all relevant years (2023 to current year)
+                ytd_data_by_year = {}
+                for y in range(2023, datetime.now().year + 1):
+                    r_ytd = requests.get(f"{get_url()}/get_ytd_stats?year={y}", timeout=5)
+                    if r_ytd.status_code == 200:
+                        ytd_data_by_year[y] = r_ytd.json()
                 
                 holidays = []
                 years = [datetime.now().year, datetime.now().year + 1]
@@ -372,13 +378,13 @@ def main(page: ft.Page):
                     if proj:
                         conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('projected', proj['period_ending'], proj['net_pay'], None))
                         
-                if r_ytd.status_code == 200:
-                    conn.execute("DELETE FROM ytd_stats WHERE year=?", (datetime.now().year,))
-                    data = r_ytd.json()
+                # Write all downloaded YTD years
+                for y, data in ytd_data_by_year.items():
+                    conn.execute("DELETE FROM ytd_stats WHERE year=?", (y,))
                     for e in data.get('earnings', []):
-                        conn.execute("INSERT INTO ytd_stats VALUES (?,?,?,?,?)", (datetime.now().year, 'earnings', e['type'], e['Amount'], e['Hours']))
+                        conn.execute("INSERT INTO ytd_stats VALUES (?,?,?,?,?)", (y, 'earnings', e['type'], e['Amount'], e['Hours']))
                     for d in data.get('deductions', []):
-                        conn.execute("INSERT INTO ytd_stats VALUES (?,?,?,?,?)", (datetime.now().year, 'deductions', d['type'], d['Amount'], 0.0))
+                        conn.execute("INSERT INTO ytd_stats VALUES (?,?,?,?,?)", (y, 'deductions', d['type'], d['Amount'], 0.0))
 
                 conn.commit()
             finally:
@@ -544,34 +550,61 @@ def main(page: ft.Page):
         width=400
     )
 
+    current_year = datetime.now().year
+    dd_ytd_year = ft.Dropdown(
+        label="Year",
+        options=[ft.dropdown.Option(str(y)) for y in range(2023, current_year + 1)],
+        value=str(current_year),
+        width=100,
+        on_change=lambda e: load_ytd_summary()
+    )
+
     def load_ytd_summary():
+        selected_year = int(dd_ytd_year.value) if dd_ytd_year.value else datetime.now().year
         conn = sqlite3.connect(DB_NAME, timeout=10)
         try:
-            rows = conn.execute("SELECT category, type, amount, hours FROM ytd_stats WHERE year=?", (datetime.now().year,)).fetchall()
+            rows = conn.execute("SELECT category, type, amount, hours FROM ytd_stats WHERE year=?", (selected_year,)).fetchall()
         finally:
             conn.close()
             
         ytd_earn_table.rows.clear()
         ytd_ded_table.rows.clear()
         
+        earnings_dict = {}
+        deductions_list = []
+        
         for cat, r_type, amt, hrs in rows:
             if cat == 'earnings':
-                ytd_earn_table.rows.append(ft.DataRow(cells=[
-                    ft.DataCell(ft.Text(r_type, size=12)), 
-                    ft.DataCell(ft.Text(f"{hrs:.2f}", size=12)), 
-                    ft.DataCell(ft.Text(f"${amt:,.2f}", size=12))
-                ]))
+                # Combine FSLA Premium and True Overtime
+                if r_type in ["FLSA Premium", "True Overtime"]:
+                    r_type = "Overtime"
+                
+                if r_type not in earnings_dict:
+                    earnings_dict[r_type] = {"amount": 0.0, "hours": 0.0}
+                earnings_dict[r_type]["amount"] += amt
+                earnings_dict[r_type]["hours"] += hrs
             elif cat == 'deductions':
-                ytd_ded_table.rows.append(ft.DataRow(cells=[
-                    ft.DataCell(ft.Text(r_type, size=12)), 
-                    ft.DataCell(ft.Text(f"${amt:,.2f}", size=12))
-                ]))
+                deductions_list.append((r_type, amt))
+                
+        for r_type, data in earnings_dict.items():
+            ytd_earn_table.rows.append(ft.DataRow(cells=[
+                ft.DataCell(ft.Text(r_type, size=12)), 
+                ft.DataCell(ft.Text(f"{data['hours']:.2f}", size=12)), 
+                ft.DataCell(ft.Text(f"${data['amount']:,.2f}", size=12))
+            ]))
+            
+        for r_type, amt in deductions_list:
+            ytd_ded_table.rows.append(ft.DataRow(cells=[
+                ft.DataCell(ft.Text(r_type, size=12)), 
+                ft.DataCell(ft.Text(f"${amt:,.2f}", size=12))
+            ]))
+            
         page.update()
 
     tab_ytd_content = ft.Container(
         padding=10,
         content=ft.Column([
-            ft.Text(f"YTD Totals ({datetime.now().year})", size=20, weight="bold"),
+            ft.Row([ft.Text("YTD Totals", size=20, weight="bold"), dd_ytd_year], alignment="spaceBetween"),
             ft.Divider(),
             ft.Text("Earnings", size=16, weight="bold"),
             ytd_earn_table,
