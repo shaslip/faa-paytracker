@@ -568,10 +568,10 @@ def main(page: ft.Page):
         width=400
     )
 
-    # Remove the hardcoded options; they will be populated dynamically
+   # Remove the hardcoded options; they will be populated dynamically
     dd_ytd_year = ft.Dropdown(
         label="Year",
-        width=100,
+        expand=True,
         on_change=lambda e: load_ytd_summary()
     )
 
@@ -636,7 +636,7 @@ def main(page: ft.Page):
     tab_ytd_content = ft.Container(
         padding=10,
         content=ft.Column([
-            ft.Row([ft.Text("YTD Totals", size=20, weight="bold"), dd_ytd_year], alignment="spaceBetween"),
+            ft.Row([ft.Text("YTD Totals", size=20, weight="bold"), dd_ytd_year]),
             ft.Divider(),
             ft.Text("Earnings", size=16, weight="bold"),
             ytd_earn_table,
