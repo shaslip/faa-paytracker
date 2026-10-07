@@ -613,8 +613,15 @@ def main(page: ft.Page):
                 
                 if r_type not in earnings_dict:
                     earnings_dict[r_type] = {"amount": 0.0, "hours": 0.0}
+                
                 earnings_dict[r_type]["amount"] += amt
-                earnings_dict[r_type]["hours"] += hrs
+                
+                # Prevent double-counting FLSA and True Overtime hours
+                if r_type == "Overtime":
+                    earnings_dict[r_type]["hours"] = max(earnings_dict[r_type]["hours"], hrs)
+                else:
+                    earnings_dict[r_type]["hours"] += hrs
+                    
             elif cat == 'deductions':
                 deductions_list.append((r_type, amt))
                 
