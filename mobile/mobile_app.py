@@ -63,7 +63,7 @@ def init_db():
         conn.close()
 
 def main(page: ft.Page):
-    APP_VERSION = "1.3.5"
+    APP_VERSION = "1.3.6"
     UPDATE_URL = "https://raw.githubusercontent.com/shaslip/faa-paytracker/main/mobile/version.json"
     page.title = "FAA PayTracker"
     page.theme_mode = ft.ThemeMode.LIGHT
