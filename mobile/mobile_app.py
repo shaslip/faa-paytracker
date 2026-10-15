@@ -119,7 +119,7 @@ def main(page: ft.Page):
     lbl_status = ft.Text(value="Ready", color="grey")
 
     # ==========================================
-    # LOCAL MATH ENGINE (Estimates Gross Bump)
+    # LOCAL MATH ENGINE (Estimates Net Bump)
     # ==========================================
     def calculate_pending_bump():
         conn = sqlite3.connect(DB_NAME, timeout=10)
@@ -129,8 +129,21 @@ def main(page: ft.Page):
             base_rate = rate_row['value1'] if rate_row else 0.0
             if base_rate <= 0: return 0.0
 
-            queue = conn.execute("SELECT * FROM offline_queue").fetchall()
-            bump = 0.0
+            ratio_row = conn.execute("SELECT value1 FROM paystub_summary WHERE type='net_ratio'").fetchone()
+            net_ratio = ratio_row['value1'] if ratio_row else 0.70
+
+            proj_row = conn.execute("SELECT label FROM paystub_summary WHERE type='projected'").fetchone()
+            next_pe = proj_row['label'] if proj_row else None
+
+            queue = conn.execute("SELECT * FROM offline_queue ORDER BY id ASC").fetchall()
+            if not queue: return 0.0
+
+            # Deduplicate by day_date (keep latest entry per date)
+            latest_queue = {q['day_date']: q for q in queue}
+
+            # Load cached observed holidays
+            hol_rows = conn.execute("SELECT date FROM holiday_cache").fetchall()
+            holidays = set(r['date'] for r in hol_rows)
 
             def time_diff(start_str, end_str):
                 if not start_str or not end_str: return 0.0
@@ -139,30 +152,55 @@ def main(page: ft.Page):
                 if e < s: e += timedelta(days=1)
                 return (e - s).total_seconds() / 3600.0
 
-            for q in queue:
-                dt = datetime.strptime(q['day_date'], "%Y-%m-%d")
+            def day_extra_gross(s_str, e_str, leave_str, ojti_val, cic_val, std_hours, is_hol):
+                # If taking full-day leave with no start/end times entered, hours worked is 0
+                act_hours = 0.0 if (leave_str and leave_str not in ["None", ""] and not s_str) else time_diff(s_str, e_str)
+                ot_hours = max(0.0, act_hours - std_hours)
+                hol_worked = min(8.0, act_hours) if (is_hol and act_hours > 0 and leave_str != "Holiday") else 0.0
+                
+                g = (ot_hours * base_rate * 1.5)
+                g += (hol_worked * base_rate)
+                g += ((ojti_val or 0.0) * base_rate * 0.25)
+                g += ((cic_val or 0.0) * base_rate * 0.10)
+                return g
+
+            gross_diff = 0.0
+
+            for date_str, q in latest_queue.items():
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                
+                # Only apply to the upcoming projected check's 14-day period
+                if next_pe:
+                    pe_dt = datetime.strptime(next_pe, "%Y-%m-%d")
+                    start_dt = pe_dt - timedelta(days=13)
+                    if not (start_dt <= dt <= pe_dt):
+                        continue
+
                 day_idx = dt.weekday()
                 target_year = dt.year
-                
+                is_hol = date_str in holidays
+
                 def_row = conn.execute("SELECT start_time, end_time FROM schedule_defaults WHERE year=? AND day_idx=?", (target_year, day_idx)).fetchone()
-                
+                act_row = conn.execute("SELECT * FROM server_actuals WHERE day_date=?", (date_str,)).fetchone()
+
                 std_hours = 0.0
                 if def_row and def_row['start_time'] and def_row['end_time']:
                     std_hours = time_diff(def_row['start_time'], def_row['end_time'])
-                    
-                act_hours = time_diff(q['start_time'], q['end_time'])
-                
-                # Overtime is anything beyond standard hours
-                ot_hours = max(0.0, act_hours - std_hours)
-                
-                ojti = q['ojti_hours'] if q['ojti_hours'] else 0.0
-                cic = q['cic_hours'] if q['cic_hours'] else 0.0
-                
-                bump += (ot_hours * base_rate * 1.5)
-                bump += (ojti * base_rate * 0.25)
-                bump += (cic * base_rate * 0.10)
-                
-            return bump
+
+                # 1. Baseline already included in server's projected net_pay
+                if act_row:
+                    base_gross = day_extra_gross(act_row['start_time'], act_row['end_time'], act_row['leave_type'], act_row['ojti_hours'], act_row['cic_hours'], std_hours, is_hol)
+                elif def_row and def_row['start_time'] and def_row['end_time']:
+                    base_gross = day_extra_gross(def_row['start_time'], def_row['end_time'], None, 0.0, 0.0, std_hours, is_hol)
+                else:
+                    base_gross = 0.0
+
+                # 2. New value from local entry
+                new_gross = day_extra_gross(q['start_time'], q['end_time'], q['leave_type'], q['ojti_hours'], q['cic_hours'], std_hours, is_hol)
+
+                gross_diff += (new_gross - base_gross)
+
+            return gross_diff * net_ratio
         finally:
             conn.close()
 
@@ -286,6 +324,7 @@ def main(page: ft.Page):
 
             conn = sqlite3.connect(DB_NAME, timeout=10)
             try:
+                conn.execute("DELETE FROM offline_queue WHERE day_date=?", (txt_date.value,))
                 conn.execute("""
                     INSERT INTO offline_queue 
                     (day_date, start_time, end_time, leave_type, ojti_hours, cic_hours, timestamp) 
@@ -300,8 +339,9 @@ def main(page: ft.Page):
             load_paystub_summary() # This applies the pending bump to the Next Check label
             
             bump = calculate_pending_bump()
-            if bump > 0:
-                lbl_status.value = f"Saved! Est bump: +${bump:,.2f} Gross"
+            if abs(bump) > 0.01:
+                sign = "+" if bump > 0 else ""
+                lbl_status.value = f"Saved! Est check change: {sign}${bump:,.2f} Net"
             else:
                 lbl_status.value = f"Saved {txt_date.value}"
             lbl_status.color = "green"
@@ -384,9 +424,11 @@ def main(page: ft.Page):
                     conn.execute("DELETE FROM paystub_summary")
                     data = r_summary.json()
                     
-                    # Store Base Rate for local math
+                    # Store Base Rate & Net Ratio for local math
                     base_rate = data.get('base_rate', 0.0)
+                    net_ratio = data.get('net_ratio', 0.70)
                     conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('rate', 'base', base_rate, None))
+                    conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('net_ratio', 'ratio', net_ratio, None))
                     
                     for h in data.get('history', []):
                         conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('history', h['period_ending'], h['net_pay'], None))
@@ -515,10 +557,8 @@ def main(page: ft.Page):
         
         for r_type, label, val in rows:
             if r_type == 'projected':
-                if pending_bump > 0:
-                    lbl_projected.value = f"Next Check ({label}): ${val:,.2f} (+${pending_bump:,.2f} pending)"
-                else:
-                    lbl_projected.value = f"Next Check ({label}): ${val:,.2f}"
+                est_net = val + pending_bump
+                lbl_projected.value = f"Next Check ({label}): ${est_net:,.2f}"
             elif r_type == 'leave':
                 leave_table.rows.append(ft.DataRow(cells=[
                     ft.DataCell(ft.Text(label)), 
