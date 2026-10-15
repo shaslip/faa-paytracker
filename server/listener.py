@@ -276,7 +276,23 @@ async def get_paystubs_summary():
         "net_pay": exp_data['stub']['net_pay']
     }
     
-    return {"history": history, "leave": leave_data, "projected": projected, "base_rate": ref_rate}
+    # Calculate marginal net ratio (1 - variable deduction rate) for accurate mobile net estimates
+    PERCENTAGE_BASED = ['Federal Tax', 'State Tax', 'OASDI', 'Medicare', 'FERS', 'TSP']
+    ref_gross = ref_earn['amount_current'].sum() if not ref_earn.empty else 0.0
+    var_ded = 0.0
+    if not ref_ded.empty and ref_gross > 0:
+        for _, row in ref_ded.iterrows():
+            if any(x in str(row['type']) for x in PERCENTAGE_BASED):
+                var_ded += row['amount_current']
+    net_ratio = (1.0 - (var_ded / ref_gross)) if ref_gross > 0 else 0.70
+    
+    return {
+        "history": history, 
+        "leave": leave_data, 
+        "projected": projected, 
+        "base_rate": ref_rate,
+        "net_ratio": net_ratio
+    }
 
 @app.get("/get_available_years")
 async def get_available_years():
