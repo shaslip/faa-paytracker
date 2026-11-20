@@ -69,7 +69,7 @@ def init_db():
         conn.close()
 
 def main(page: ft.Page):
-    APP_VERSION = "1.3.8"
+    APP_VERSION = "1.3.9"
     UPDATE_URL = "https://raw.githubusercontent.com/shaslip/faa-paytracker/main/mobile/version.json"
     page.title = "FAA PayTracker"
     page.theme_mode = ft.ThemeMode.LIGHT
@@ -594,6 +594,9 @@ def main(page: ft.Page):
                 # Write all downloaded YTD years
                 for y, data in ytd_data_by_year.items():
                     conn.execute("DELETE FROM ytd_stats WHERE year=?", (y,))
+                    pp_cnt = data.get('pay_periods', 0)
+                    if pp_cnt:
+                        conn.execute("INSERT INTO ytd_stats VALUES (?,?,?,?,?)", (y, 'meta', 'pay_periods', float(pp_cnt), 0.0))
                     for e in data.get('earnings', []):
                         conn.execute("INSERT INTO ytd_stats VALUES (?,?,?,?,?)", (y, 'earnings', e['type'], e['Amount'], e['Hours']))
                     for d in data.get('deductions', []):
@@ -715,7 +718,10 @@ def main(page: ft.Page):
     paystub_dialog_content = ft.Column([], scroll=ft.ScrollMode.ADAPTIVE, spacing=8)
     paystub_dialog = ft.AlertDialog(
         title=ft.Text("Paystub Details"),
-        content=ft.Container(content=paystub_dialog_content, width=360, height=540),
+        inset_padding=ft.padding.symmetric(horizontal=10, vertical=16),
+        title_padding=ft.padding.only(left=12, right=12, top=12, bottom=4),
+        content_padding=ft.padding.symmetric(horizontal=10, vertical=6),
+        content=ft.Container(content=paystub_dialog_content, width=500, height=580),
         actions=[
             ft.TextButton("Close", on_click=lambda e: setattr(paystub_dialog, 'open', False) or page.update())
         ],
@@ -780,57 +786,69 @@ def main(page: ft.Page):
         return None
 
     def _populate_paystub_tables(earnings, deductions, leave, flags, remarks_raw):
+        def num_cell(txt, w, size=10, bold=False, color=None):
+            return ft.Container(
+                width=w,
+                alignment=ft.alignment.center_right,
+                content=ft.Text(
+                    txt,
+                    size=size,
+                    weight="bold" if bold else None,
+                    color=color,
+                    no_wrap=True,
+                    max_lines=1,
+                ),
+            )
+
         if earnings:
             paystub_dialog_content.controls.append(_section_header("Earnings"))
             paystub_dialog_content.controls.append(
                 ft.Row([
-                    ft.Text("Type", size=10, weight="bold", expand=3),
-                    ft.Text("Rate", size=10, weight="bold", expand=1, text_align=ft.TextAlign.RIGHT),
-                    ft.Text("Hrs", size=10, weight="bold", expand=1, text_align=ft.TextAlign.RIGHT),
-                    ft.Text("Curr", size=10, weight="bold", expand=2, text_align=ft.TextAlign.RIGHT),
-                    ft.Text("YTD", size=10, weight="bold", expand=2, text_align=ft.TextAlign.RIGHT),
-                ])
+                    ft.Text("Type", size=10, weight="bold", expand=True),
+                    num_cell("Rate", 50, bold=True),
+                    num_cell("Hrs", 44, bold=True),
+                    num_cell("Current", 72, bold=True),
+                ], spacing=4)
             )
             for r in earnings:
                 paystub_dialog_content.controls.append(
                     ft.Row([
-                        ft.Text(str(r.get("type", "")), size=11, expand=3),
-                        ft.Text(_fmt_num(r.get("rate")), size=10, expand=1, text_align=ft.TextAlign.RIGHT),
-                        ft.Text(_fmt_num(r.get("hours_current")), size=10, expand=1, text_align=ft.TextAlign.RIGHT),
-                        ft.Text(_fmt_money(r.get("amount_current")), size=10, expand=2, text_align=ft.TextAlign.RIGHT),
-                        ft.Text(_fmt_money(r.get("amount_ytd")), size=10, expand=2, text_align=ft.TextAlign.RIGHT),
-                    ])
+                        ft.Text(str(r.get("type", "")), size=11, expand=True),
+                        num_cell(_fmt_num(r.get("rate")), 50),
+                        num_cell(_fmt_num(r.get("hours_current")), 44),
+                        num_cell(_fmt_money(r.get("amount_current")), 72),
+                    ], spacing=4)
                 )
 
         if deductions:
             paystub_dialog_content.controls.append(_section_header("Deductions"))
             paystub_dialog_content.controls.append(
                 ft.Row([
-                    ft.Text("Type", size=10, weight="bold", expand=4),
-                    ft.Text("Current", size=10, weight="bold", expand=2, text_align=ft.TextAlign.RIGHT),
-                    ft.Text("YTD", size=10, weight="bold", expand=2, text_align=ft.TextAlign.RIGHT),
-                ])
+                    ft.Text("Type", size=10, weight="bold", expand=True),
+                    num_cell("Current", 70, bold=True),
+                    num_cell("YTD", 78, bold=True),
+                ], spacing=4)
             )
             for r in deductions:
                 paystub_dialog_content.controls.append(
                     ft.Row([
-                        ft.Text(str(r.get("type", "")), size=11, expand=4),
-                        ft.Text(_fmt_money(r.get("amount_current")), size=10, expand=2, text_align=ft.TextAlign.RIGHT),
-                        ft.Text(_fmt_money(r.get("amount_ytd")), size=10, expand=2, text_align=ft.TextAlign.RIGHT),
-                    ])
+                        ft.Text(str(r.get("type", "")), size=11, expand=True),
+                        num_cell(_fmt_money(r.get("amount_current")), 70),
+                        num_cell(_fmt_money(r.get("amount_ytd")), 78),
+                    ], spacing=4)
                 )
 
         if leave:
             paystub_dialog_content.controls.append(_section_header("Leave"))
             paystub_dialog_content.controls.append(
                 ft.Row([
-                    ft.Text("Type", size=10, weight="bold", expand=3),
-                    ft.Text("Start", size=10, weight="bold", expand=1, text_align=ft.TextAlign.RIGHT),
-                    ft.Text("Earn", size=10, weight="bold", expand=1, text_align=ft.TextAlign.RIGHT),
-                    ft.Text("Used", size=10, weight="bold", expand=1, text_align=ft.TextAlign.RIGHT),
-                    ft.Text("Adv", size=10, weight="bold", expand=1, text_align=ft.TextAlign.RIGHT),
-                    ft.Text("End", size=10, weight="bold", expand=1, text_align=ft.TextAlign.RIGHT),
-                ])
+                    ft.Text("Type", size=10, weight="bold", expand=True),
+                    num_cell("Start", 42, bold=True),
+                    num_cell("Earn", 38, bold=True),
+                    num_cell("Used", 40, bold=True),
+                    num_cell("Adv", 38, bold=True),
+                    num_cell("End", 44, bold=True),
+                ], spacing=3)
             )
             for r in leave:
                 l_type = str(r.get("type", ""))
@@ -842,21 +860,13 @@ def main(page: ft.Page):
                 end_err = is_err and not adv_err
                 paystub_dialog_content.controls.append(
                     ft.Row([
-                        ft.Text(l_type, size=10, expand=3),
-                        ft.Text(_fmt_num(r.get("balance_start")), size=10, expand=1, text_align=ft.TextAlign.RIGHT),
-                        ft.Text(_fmt_num(r.get("earned_current")), size=10, expand=1, text_align=ft.TextAlign.RIGHT),
-                        ft.Text(_fmt_num(r.get("used_current")), size=10, expand=1, text_align=ft.TextAlign.RIGHT),
-                        ft.Text(
-                            _fmt_num(adv_val), size=10, expand=1, text_align=ft.TextAlign.RIGHT,
-                            color=ft.Colors.RED_700 if adv_err else None,
-                            weight="bold" if adv_err else None,
-                        ),
-                        ft.Text(
-                            _fmt_num(end_val), size=10, expand=1, text_align=ft.TextAlign.RIGHT,
-                            color=ft.Colors.RED_700 if end_err else None,
-                            weight="bold" if end_err else None,
-                        ),
-                    ])
+                        ft.Text(l_type, size=10, expand=True),
+                        num_cell(_fmt_num(r.get("balance_start")), 42),
+                        num_cell(_fmt_num(r.get("earned_current")), 38),
+                        num_cell(_fmt_num(r.get("used_current")), 40),
+                        num_cell(_fmt_num(adv_val), 38, bold=adv_err, color=ft.Colors.RED_700 if adv_err else None),
+                        num_cell(_fmt_num(end_val), 44, bold=end_err, color=ft.Colors.RED_700 if end_err else None),
+                    ], spacing=3)
                 )
 
         if flags:
@@ -1071,6 +1081,19 @@ def main(page: ft.Page):
         width=400,
         column_spacing=10
     )
+
+    ytd_proj_earn_table = ft.DataTable(
+        columns=[
+            ft.DataColumn(ft.Text("Earnings Type")),
+            ft.DataColumn(ft.Text("Hrs")),
+            ft.DataColumn(ft.Text("Amount"))
+        ],
+        heading_row_color=ft.Colors.BLUE_50,
+        width=400,
+        column_spacing=10
+    )
+
+    lbl_ytd_proj_sub = ft.Text("", size=11, color=ft.Colors.GREY_600)
     
     ytd_ded_table = ft.DataTable(
         columns=[
@@ -1109,17 +1132,22 @@ def main(page: ft.Page):
             
             # 2. Load the actual data for the selected year
             rows = conn.execute("SELECT category, type, amount, hours FROM ytd_stats WHERE year=?", (selected_year,)).fetchall()
+            detail_rows = conn.execute("SELECT data_json FROM paystub_details").fetchall()
         finally:
             conn.close()
             
         ytd_earn_table.rows.clear()
+        ytd_proj_earn_table.rows.clear()
         ytd_ded_table.rows.clear()
         
         earnings_dict = {}
         deductions_list = []
+        pp_count = 0
         
         for cat, r_type, amt, hrs in rows:
-            if cat == 'earnings':
+            if cat == 'meta' and r_type == 'pay_periods':
+                pp_count = int(round(amt))
+            elif cat == 'earnings':
                 # Combine FSLA Premium and True Overtime
                 if r_type in ["FLSA Premium", "True Overtime"]:
                     r_type = "Overtime"
@@ -1137,18 +1165,69 @@ def main(page: ft.Page):
                     
             elif cat == 'deductions':
                 deductions_list.append((r_type, amt))
-                
+
+        if pp_count <= 0 and detail_rows:
+            year_prefix = f"{selected_year}-"
+            for (dj,) in detail_rows:
+                try:
+                    pd_str = json.loads(dj).get("stub", {}).get("pay_date") or ""
+                    if pd_str.startswith(year_prefix):
+                        pp_count += 1
+                except Exception:
+                    pass
+
+        total_actual_amt = 0.0
         for r_type, data in earnings_dict.items():
+            total_actual_amt += data['amount']
             ytd_earn_table.rows.append(ft.DataRow(cells=[
                 ft.DataCell(ft.Text(r_type, size=12)), 
-                ft.DataCell(ft.Text(f"{data['hours']:.2f}", size=12)), 
-                ft.DataCell(ft.Text(f"${data['amount']:,.2f}", size=12))
+                ft.DataCell(ft.Text(f"{data['hours']:.2f}", size=12, no_wrap=True)), 
+                ft.DataCell(ft.Text(f"${data['amount']:,.2f}", size=12, no_wrap=True))
             ]))
+        if earnings_dict:
+            ytd_earn_table.rows.append(ft.DataRow(
+                color=ft.Colors.GREY_100,
+                cells=[
+                    ft.DataCell(ft.Text("Total", size=12, weight="bold")),
+                    ft.DataCell(ft.Text("-", size=12)),
+                    ft.DataCell(ft.Text(f"${total_actual_amt:,.2f}", size=12, weight="bold", no_wrap=True)),
+                ]
+            ))
+
+        target_pps = max(26, pp_count) if pp_count > 0 else 26
+        scale = (target_pps / pp_count) if pp_count > 0 else 0.0
+        if pp_count > 0 and pp_count < 26:
+            lbl_ytd_proj_sub.value = f"Projected to 26 pay periods (based on {pp_count} to date)"
+        elif pp_count >= 26:
+            lbl_ytd_proj_sub.value = f"Full year complete ({pp_count} pay periods)"
+        else:
+            lbl_ytd_proj_sub.value = "Sync with PC to calculate projected totals"
+
+        total_proj_amt = 0.0
+        if scale > 0:
+            for r_type, data in earnings_dict.items():
+                proj_hrs = data['hours'] * scale
+                proj_amt = data['amount'] * scale
+                total_proj_amt += proj_amt
+                ytd_proj_earn_table.rows.append(ft.DataRow(cells=[
+                    ft.DataCell(ft.Text(r_type, size=12)),
+                    ft.DataCell(ft.Text(f"{proj_hrs:.2f}", size=12, no_wrap=True)),
+                    ft.DataCell(ft.Text(f"${proj_amt:,.2f}", size=12, no_wrap=True)),
+                ]))
+            if earnings_dict:
+                ytd_proj_earn_table.rows.append(ft.DataRow(
+                    color=ft.Colors.BLUE_50,
+                    cells=[
+                        ft.DataCell(ft.Text("Total", size=12, weight="bold")),
+                        ft.DataCell(ft.Text("-", size=12)),
+                        ft.DataCell(ft.Text(f"${total_proj_amt:,.2f}", size=12, weight="bold", no_wrap=True)),
+                    ]
+                ))
             
         for r_type, amt in deductions_list:
             ytd_ded_table.rows.append(ft.DataRow(cells=[
                 ft.DataCell(ft.Text(r_type, size=12)), 
-                ft.DataCell(ft.Text(f"${amt:,.2f}", size=12))
+                ft.DataCell(ft.Text(f"${amt:,.2f}", size=12, no_wrap=True))
             ]))
             
         page.update()
@@ -1158,8 +1237,12 @@ def main(page: ft.Page):
         content=ft.Column([
             ft.Row([ft.Text("YTD Totals", size=20, weight="bold"), dd_ytd_year]),
             ft.Divider(),
-            ft.Text("Earnings", size=16, weight="bold"),
+            ft.Text("Earnings (Actual)", size=16, weight="bold"),
             ytd_earn_table,
+            ft.Divider(),
+            ft.Text("Earnings (Projected)", size=16, weight="bold"),
+            lbl_ytd_proj_sub,
+            ytd_proj_earn_table,
             ft.Divider(),
             ft.Text("Deductions", size=16, weight="bold"),
             ytd_ded_table,

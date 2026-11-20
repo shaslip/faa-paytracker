@@ -64,7 +64,7 @@ def render_paystub_html(data, flags=None, mode="actual"):
     # --- EARNINGS ---
     parts.append('<tr><td colspan="12" class="blue"><span class="text-align-center cell-title-lg">Earnings</span></td></tr>')
     parts.append('<tr><td colspan="12"><table class="table no-border no-margin-padding">')
-    parts.append('<tr><th class="col-5">Type</th><th class="col-1 text-align-right">Rate</th><th class="col-1 text-align-right">Hours</th><th class="col-1 text-align-right">Current</th><th class="col-1 text-align-right">YTD</th></tr>')
+    parts.append('<tr><th class="col-6">Type</th><th class="col-2 text-align-right">Rate</th><th class="col-2 text-align-right">Hours</th><th class="col-2 text-align-right">Current</th></tr>')
     
     if not data['earnings'].empty:
         for _, r in data['earnings'].iterrows():
@@ -74,7 +74,6 @@ def render_paystub_html(data, flags=None, mode="actual"):
                 <td class="text-align-right">{val(r['rate'], money=False)}</td>
                 <td class="text-align-right">{val(r['hours_current'], money=False)}</td>
                 <td class="text-align-right">{val(r['amount_current'])}</td>
-                <td class="text-align-right">{val(r['amount_ytd'])}</td>
             </tr>
             ''')
     parts.append('</table></td></tr>')

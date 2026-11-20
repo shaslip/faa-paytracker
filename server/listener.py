@@ -410,7 +410,7 @@ async def get_ytd_stats(year: Optional[int] = None):
     df_earn, df_ded = models.get_all_line_items()
     
     if df_earn.empty and df_ded.empty:
-        return {"earnings": [], "deductions": []}
+        return {"earnings": [], "deductions": [], "pay_periods": 0}
         
     # Filter by pay_date year (Tax Year)
     df_earn['pay_date'] = pd.to_datetime(df_earn['pay_date'])
@@ -418,6 +418,10 @@ async def get_ytd_stats(year: Optional[int] = None):
     
     df_ded['pay_date'] = pd.to_datetime(df_ded['pay_date'])
     df_ded = df_ded[df_ded['pay_date'].dt.year == target_year]
+
+    pay_periods = int(df_earn['pay_date'].nunique()) if not df_earn.empty else (
+        int(df_ded['pay_date'].nunique()) if not df_ded.empty else 0
+    )
     
     def parse_hours(val):
         if isinstance(val, str) and ":" in val:
@@ -438,7 +442,7 @@ async def get_ytd_stats(year: Optional[int] = None):
         ytd_ded = ytd_ded.sort_values(by='Amount', ascending=False)
         ded_data = ytd_ded.to_dict('records')
         
-    return {"earnings": earn_data, "deductions": ded_data}
+    return {"earnings": earn_data, "deductions": ded_data, "pay_periods": pay_periods}
 
 if __name__ == "__main__":
     print(f"🚀 Listener active at http://{HOST}:{PORT}")
