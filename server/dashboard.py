@@ -118,8 +118,8 @@ with tab_audit:
             with m2:
                 # Simple style map for the dataframe
                 def highlight_status(val):
-                    if "Gov Owes" in val: return 'background-color: #ffcccc; color: black;'
-                    if "Backpay" in val: return 'background-color: #ccffcc; color: black;'
+                    if "Gov Owes" in val: return 'background-color: rgba(255, 75, 75, 0.25);'
+                    if "Backpay" in val: return 'background-color: rgba(39, 174, 96, 0.25);'
                     return ''
 
                 st.dataframe(
@@ -412,7 +412,7 @@ with tab_audit:
                 st.markdown(views.render_paystub_html(act_data, act_flags, mode="actual"), unsafe_allow_html=True)
             else:
                 st.markdown("""
-                <div style="text-align: center; padding: 40px; color: #666; background: #f9f9f9; border: 1px dashed #ccc;">
+                <div class="no-official-data">
                     <h3>No Official Data Yet</h3>
                     <p>This paystub has not been imported.</p>
                     <p>Once imported, your manual entries will be matched automatically.</p>
@@ -511,7 +511,7 @@ with tab_facts:
             st.caption("**Mine (Observed)**")
             # Apply highlighting to 'Mine' table where date is adjusted
             def highlight_adj(row):
-                return ['background-color: #ffcc00; color: black' if row['Adjusted'] else '' for _ in row]
+                return ['background-color: rgba(255, 193, 7, 0.25);' if row['Adjusted'] else '' for _ in row]
             
             st.dataframe(
                 df_mine.style.apply(highlight_adj, axis=1), 
