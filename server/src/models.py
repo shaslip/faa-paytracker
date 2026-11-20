@@ -116,8 +116,28 @@ def get_full_paystub_data(stub_id):
     earnings = pd.read_sql("SELECT * FROM earnings WHERE paystub_id = ?", conn, params=(stub_id,))
     deductions = pd.read_sql("SELECT * FROM deductions WHERE paystub_id = ?", conn, params=(stub_id,))
     leave = pd.read_sql("SELECT * FROM leave_balances WHERE paystub_id = ?", conn, params=(stub_id,))
+    prev_leave_advanced = None
+    prev_row = conn.execute(
+        "SELECT id FROM paystubs WHERE period_ending < ? ORDER BY period_ending DESC LIMIT 1",
+        (stub['period_ending'],)
+    ).fetchone()
+    if prev_row:
+        prev_leave_rows = conn.execute(
+            "SELECT * FROM leave_balances WHERE paystub_id = ?",
+            (prev_row['id'],)
+        ).fetchall()
+        prev_leave_advanced = {
+            r['type']: (r['advanced'] if 'advanced' in r.keys() and r['advanced'] is not None else 0.0)
+            for r in prev_leave_rows
+        }
     conn.close()
-    return {'stub': stub, 'earnings': earnings, 'deductions': deductions, 'leave': leave}
+    return {
+        'stub': stub,
+        'earnings': earnings,
+        'deductions': deductions,
+        'leave': leave,
+        'prev_leave_advanced': prev_leave_advanced
+    }
 
 def get_pay_period_dates(period_ending_str):
     end_date = datetime.strptime(period_ending_str, "%Y-%m-%d")

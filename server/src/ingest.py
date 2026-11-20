@@ -64,6 +64,7 @@ def setup_database():
         balance_start REAL,
         earned_current REAL,
         used_current REAL,
+        advanced REAL DEFAULT 0,
         balance_end REAL,
         FOREIGN KEY(paystub_id) REFERENCES paystubs(id)
     )''')
@@ -119,6 +120,15 @@ def parse_html_paystub(html_content, filename, conn):
         existing = c.fetchone()
         if existing:
             c.execute("UPDATE paystubs SET pay_period_num = ? WHERE id = ?", (pay_period_num, existing[0]))
+            leave_table = soup.find("table", {"id": "Leave"})
+            if leave_table:
+                for row in leave_table.find_all("tr")[1:]:
+                    cols = row.find_all("td")
+                    if len(cols) >= 9:
+                        c.execute(
+                            "UPDATE leave_balances SET advanced = ? WHERE paystub_id = ? AND type = ?",
+                            (clean_float(cols[7].get_text()), existing[0], cols[0].get_text().strip())
+                        )
             conn.commit()
             print(f"Updated {filename}: Added PP {pay_period_num}.")
             return
@@ -189,13 +199,14 @@ def parse_html_paystub(html_content, filename, conn):
         for row in leave_table.find_all("tr")[1:]:
             cols = row.find_all("td")
             if len(cols) >= 9:
-                c.execute('''INSERT INTO leave_balances (paystub_id, type, balance_start, earned_current, used_current, balance_end)
-                             VALUES (?, ?, ?, ?, ?, ?)''',
+                c.execute('''INSERT INTO leave_balances (paystub_id, type, balance_start, earned_current, used_current, advanced, balance_end)
+                             VALUES (?, ?, ?, ?, ?, ?, ?)''',
                           (paystub_id,
                            cols[0].get_text().strip(),
                            clean_float(cols[1].get_text()),
                            clean_float(cols[3].get_text()),
                            clean_float(cols[5].get_text()),
+                           clean_float(cols[7].get_text()),
                            clean_float(cols[8].get_text())
                           ))
 

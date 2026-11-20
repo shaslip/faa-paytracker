@@ -99,17 +99,22 @@ def render_paystub_html(data, flags=None, mode="actual"):
     if not data['leave'].empty:
         parts.append('<tr><td colspan="12" class="blue"><span class="text-align-center cell-title-lg">Leave</span></td></tr>')
         parts.append('<tr><td colspan="12"><table class="table no-border no-margin-padding">')
-        parts.append('<tr><th class="col-2">Type</th><th class="col-1 text-align-right">Start Bal</th><th class="col-1 text-align-right">Earned</th><th class="col-1 text-align-right">Used</th><th class="col-1 text-align-right">End Bal</th></tr>')
+        parts.append('<tr><th class="col-2">Type</th><th class="col-1 text-align-right">Start Bal</th><th class="col-1 text-align-right">Earned</th><th class="col-1 text-align-right">Used</th><th class="col-1 text-align-right">Adv</th><th class="col-1 text-align-right">End Bal</th></tr>')
         
         for _, r in data['leave'].iterrows():
             fid = f"leave_{r['type']}_end"
+            adv_val = r['advanced'] if 'advanced' in r.index and pd.notna(r['advanced']) else 0.0
+            end_val = r['balance_end'] if pd.notna(r['balance_end']) else 0.0
+            adv_fid = fid if (adv_val > 0 and end_val == 0) else None
+            end_fid = fid if adv_fid is None else None
             parts.append(f'''
             <tr>
                 <td>{r['type']}</td>
                 <td class="text-align-right">{val(r['balance_start'], money=False)}</td>
                 <td class="text-align-right">{val(r['earned_current'], money=False)}</td>
                 <td class="text-align-right">{val(r['used_current'], money=False)}</td>
-                <td class="text-align-right">{val(r['balance_end'], fid, money=False)}</td>
+                <td class="text-align-right">{val(adv_val, adv_fid, money=False)}</td>
+                <td class="text-align-right">{val(r['balance_end'], end_fid, money=False)}</td>
             </tr>
             ''')
         parts.append('</table></td></tr>')

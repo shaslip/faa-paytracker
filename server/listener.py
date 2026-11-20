@@ -224,8 +224,8 @@ async def get_paystubs_summary():
     last_stub_id = int(last_stub['id'])
     last_pe = last_stub['period_ending']
     
-    # 1. Recent History (Last 5)
-    history = stubs.head(5)[['period_ending', 'net_pay']].to_dict('records')
+    # 1. Recent History (All paystubs, newest first; mobile paginates with Show More)
+    history = stubs[['id', 'period_ending', 'net_pay']].to_dict('records')
     
     # 2. Leave Balances
     full_data = models.get_full_paystub_data(last_stub_id)
@@ -233,7 +233,10 @@ async def get_paystubs_summary():
     leave_data = []
     if not leave_df.empty:
         for _, r in leave_df.iterrows():
-            leave_data.append({"type": r['type'], "balance": r['balance_end']})
+            adv_val = float(r['advanced']) if 'advanced' in r.index and pd.notna(r['advanced']) else 0.0
+            end_val = float(r['balance_end']) if pd.notna(r['balance_end']) else 0.0
+            eff_bal = end_val if end_val > 0 else (-adv_val if adv_val > 0 else 0.0)
+            leave_data.append({"type": r['type'], "balance": eff_bal})
             
     # 3. Projected Next Check
     last_dt = datetime.strptime(last_pe, "%Y-%m-%d")
@@ -290,9 +293,96 @@ async def get_paystubs_summary():
         "history": history, 
         "leave": leave_data, 
         "projected": projected, 
+        "last_period_ending": last_pe,
         "base_rate": ref_rate,
         "net_ratio": net_ratio
     }
+
+class PaystubDetailRequest(BaseModel):
+    known_periods: List[str] = []
+
+def _clean_val(v):
+    if pd.isna(v):
+        return None
+    if hasattr(v, "item"):
+        return v.item()
+    return v
+
+def _serialize_paystub(stub_id: int):
+    full_data = models.get_full_paystub_data(stub_id)
+    flags = logic.run_full_audit(full_data)
+
+    stub = {k: _clean_val(v) for k, v in full_data['stub'].items()}
+
+    earnings = []
+    if not full_data['earnings'].empty:
+        for _, r in full_data['earnings'].iterrows():
+            earnings.append({
+                "type": _clean_val(r['type']),
+                "rate": _clean_val(r['rate']),
+                "hours_current": _clean_val(r['hours_current']),
+                "amount_current": _clean_val(r['amount_current']),
+                "amount_ytd": _clean_val(r['amount_ytd']),
+            })
+
+    deductions = []
+    if not full_data['deductions'].empty:
+        for _, r in full_data['deductions'].iterrows():
+            deductions.append({
+                "type": _clean_val(r['type']),
+                "amount_current": _clean_val(r['amount_current']),
+                "amount_ytd": _clean_val(r['amount_ytd']),
+            })
+
+    leave = []
+    if not full_data['leave'].empty:
+        for _, r in full_data['leave'].iterrows():
+            adv_val = _clean_val(r['advanced']) if 'advanced' in r.index else 0.0
+            leave.append({
+                "type": _clean_val(r['type']),
+                "balance_start": _clean_val(r['balance_start']),
+                "earned_current": _clean_val(r['earned_current']),
+                "used_current": _clean_val(r['used_current']),
+                "advanced": adv_val if adv_val is not None else 0.0,
+                "balance_end": _clean_val(r['balance_end']),
+            })
+
+    return {
+        "stub": stub,
+        "earnings": earnings,
+        "deductions": deductions,
+        "leave": leave,
+        "flags": flags,
+    }
+
+@app.post("/get_paystubs_detail")
+async def get_paystubs_detail(req: PaystubDetailRequest):
+    """
+    Returns full paystub details (with audit flags) for any paystubs not in known_periods.
+    """
+    stubs = models.get_paystubs_meta()
+    if stubs.empty:
+        return {}
+
+    known = set(req.known_periods)
+    details = {}
+    for _, row in stubs.iterrows():
+        pe = row['period_ending']
+        if pe in known:
+            continue
+        details[pe] = _serialize_paystub(int(row['id']))
+    return details
+
+@app.get("/get_paystub_detail")
+async def get_paystub_detail(period_ending: str):
+    """
+    Live fallback endpoint to fetch a single paystub's full details by period_ending.
+    """
+    stubs = models.get_paystubs_meta()
+    match = stubs[stubs['period_ending'] == period_ending]
+    if match.empty:
+        raise HTTPException(status_code=404, detail="Paystub not found")
+    return _serialize_paystub(int(match.iloc[0]['id']))
 
 @app.get("/get_available_years")
 async def get_available_years():

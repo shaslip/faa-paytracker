@@ -58,12 +58,18 @@ def init_db():
                 year INTEGER PRIMARY KEY
             )
         ''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS paystub_details (
+                period_ending TEXT PRIMARY KEY,
+                data_json TEXT
+            )
+        ''')
         conn.commit()
     finally:
         conn.close()
 
 def main(page: ft.Page):
-    APP_VERSION = "1.3.7"
+    APP_VERSION = "1.3.8"
     UPDATE_URL = "https://raw.githubusercontent.com/shaslip/faa-paytracker/main/mobile/version.json"
     page.title = "FAA PayTracker"
     page.theme_mode = ft.ThemeMode.LIGHT
@@ -119,8 +125,93 @@ def main(page: ft.Page):
     lbl_status = ft.Text(value="Ready", color="grey")
 
     # ==========================================
-    # LOCAL MATH ENGINE (Estimates Net Bump)
+    # LOCAL MATH ENGINE (Estimates Net Bump & Leave)
     # ==========================================
+    REF_DATE = datetime(2024, 12, 14).date()
+
+    def get_current_pay_period():
+        today = datetime.now().date()
+        diff = (today - REF_DATE).days
+        remainder = diff % 14
+        curr_pe = today if remainder == 0 else today + timedelta(days=(14 - remainder))
+        curr_start = curr_pe - timedelta(days=13)
+        return curr_start, curr_pe
+
+    def hmm_to_min(v):
+        if v is None: return 0
+        sign = -1 if v < 0 else 1
+        av = abs(float(v))
+        h = int(av)
+        m = round((av - h) * 100)
+        return sign * ((h * 60) + m)
+
+    def min_to_hmm(m):
+        sign = -1 if m < 0 else 1
+        am = abs(int(round(m)))
+        return sign * ((am // 60) + ((am % 60) / 100.0))
+
+    def map_leave_balance_key(bal_type):
+        if bal_type == "Annual Leave": return "Annual"
+        if bal_type == "Sick Leave": return "Sick"
+        if bal_type in ("Credit", "Credit Hours"): return "Credit"
+        if bal_type in ("Comp", "Comp Time"): return "Comp"
+        return None
+
+    def calculate_pending_leave_used():
+        """Returns {leave_key: minutes_used} for shifts after the last official paystub."""
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.row_factory = sqlite3.Row
+        try:
+            pe_row = conn.execute("SELECT label FROM paystub_summary WHERE type='last_pe'").fetchone()
+            last_pe = pe_row['label'] if pe_row else None
+            if not last_pe:
+                hist_row = conn.execute(
+                    "SELECT label FROM paystub_summary WHERE type='history' ORDER BY label DESC LIMIT 1"
+                ).fetchone()
+                last_pe = hist_row['label'] if hist_row else None
+
+            # Merge server_actuals and offline_queue (offline_queue overrides per day_date)
+            merged = {}
+            for r in conn.execute("SELECT day_date, start_time, end_time, leave_type FROM server_actuals").fetchall():
+                merged[r['day_date']] = dict(r)
+            for r in conn.execute("SELECT day_date, start_time, end_time, leave_type FROM offline_queue ORDER BY id ASC").fetchall():
+                merged[r['day_date']] = dict(r)
+
+            def time_diff_hrs(start_str, end_str):
+                if not start_str or not end_str: return 0.0
+                s = datetime.strptime(start_str, "%H:%M")
+                e = datetime.strptime(end_str, "%H:%M")
+                if e < s: e += timedelta(days=1)
+                return (e - s).total_seconds() / 3600.0
+
+            used_mins = {}
+            for date_str, entry in merged.items():
+                if last_pe and date_str <= last_pe:
+                    continue
+                l_type = entry.get('leave_type')
+                if not l_type or l_type in ["None", "", "Holiday", "LWOP"]:
+                    continue
+
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                def_row = conn.execute(
+                    "SELECT start_time, end_time FROM schedule_defaults WHERE year=? AND day_idx=?",
+                    (dt.year, dt.weekday())
+                ).fetchone()
+                if not def_row or not def_row['start_time'] or not def_row['end_time']:
+                    continue
+
+                std_hours = time_diff_hrs(def_row['start_time'], def_row['end_time'])
+                s_str = entry.get('start_time') or ""
+                e_str = entry.get('end_time') or ""
+                worked_hours = time_diff_hrs(s_str, e_str) if (s_str and e_str) else 0.0
+                leave_hours = max(0.0, std_hours - worked_hours)
+                if leave_hours > 0:
+                    used_mins[l_type] = used_mins.get(l_type, 0) + int(round(leave_hours * 60))
+
+            return used_mins
+        finally:
+            conn.close()
+
     def calculate_pending_bump():
         conn = sqlite3.connect(DB_NAME, timeout=10)
         conn.row_factory = sqlite3.Row
@@ -289,6 +380,43 @@ def main(page: ft.Page):
     txt_start = ft.TextField(label="Start (HH:MM)", hint_text="07:00", width=160, on_change=auto_colon)
     txt_end = ft.TextField(label="End (HH:MM)", hint_text="15:00", width=160, on_change=auto_colon)
 
+    def on_leave_change(e):
+        try:
+            dt = datetime.strptime(txt_date.value, "%Y-%m-%d")
+        except Exception:
+            return
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.row_factory = sqlite3.Row
+        try:
+            row_def = conn.execute(
+                "SELECT start_time, end_time FROM schedule_defaults WHERE year=? AND day_idx=?",
+                (dt.year, dt.weekday())
+            ).fetchone()
+        finally:
+            conn.close()
+
+        def_start = (row_def['start_time'] or "") if row_def else ""
+        def_end = (row_def['end_time'] or "") if row_def else ""
+        cur_start = (txt_start.value or "").strip()
+        cur_end = (txt_end.value or "").strip()
+
+        if dd_leave.value and dd_leave.value != "None":
+            # Auto-clear Start/End if they still match the standard default shift
+            if def_start and def_end and cur_start == def_start and cur_end == def_end:
+                txt_start.value = ""
+                txt_end.value = ""
+                txt_start.data = 0
+                txt_end.data = 0
+                page.update()
+        else:
+            # Restore standard shift if cleared and user switched leave back to None
+            if not cur_start and not cur_end and def_start and def_end:
+                txt_start.value = def_start
+                txt_end.value = def_end
+                txt_start.data = len(def_start)
+                txt_end.data = len(def_end)
+                page.update()
+
     dd_leave = ft.Dropdown(
         label="Leave Type (Optional)",
         options=[
@@ -297,7 +425,8 @@ def main(page: ft.Page):
             ft.dropdown.Option("Credit"), ft.dropdown.Option("Comp"),
             ft.dropdown.Option("LWOP"),
         ],
-        value="None"
+        value="None",
+        on_change=on_leave_change,
     )
 
     txt_ojti = ft.TextField(label="OJTI (HH:MM)", width=160, on_change=auto_colon)
@@ -371,6 +500,19 @@ def main(page: ft.Page):
                 r_sched = requests.get(f"{get_url()}/get_schedule_defaults", timeout=5)
                 r_shifts = requests.get(f"{get_url()}/get_saved_shifts?year={datetime.now().year}", timeout=5)
                 r_summary = requests.get(f"{get_url()}/get_paystubs_summary", timeout=5)
+
+                # Incremental pull of full paystub details for offline viewing
+                known_rows = conn.execute("SELECT period_ending FROM paystub_details").fetchall()
+                known_periods = [r['period_ending'] for r in known_rows]
+                r_details = None
+                try:
+                    r_details = requests.post(
+                        f"{get_url()}/get_paystubs_detail",
+                        json={"known_periods": known_periods},
+                        timeout=20
+                    )
+                except Exception:
+                    r_details = None
                 
                 # --- NEW: Fetch available years ---
                 r_years = requests.get(f"{get_url()}/get_available_years", timeout=5)
@@ -429,14 +571,25 @@ def main(page: ft.Page):
                     net_ratio = data.get('net_ratio', 0.70)
                     conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('rate', 'base', base_rate, None))
                     conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('net_ratio', 'ratio', net_ratio, None))
+                    last_pe = data.get('last_period_ending')
+                    if last_pe:
+                        conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('last_pe', last_pe, 0.0, None))
                     
                     for h in data.get('history', []):
-                        conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('history', h['period_ending'], h['net_pay'], None))
+                        stub_id_str = str(h['id']) if 'id' in h and h['id'] is not None else None
+                        conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('history', h['period_ending'], h['net_pay'], stub_id_str))
                     for l in data.get('leave', []):
                         conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('leave', l['type'], l['balance'], None))
                     proj = data.get('projected')
                     if proj:
                         conn.execute("INSERT INTO paystub_summary VALUES (?,?,?,?)", ('projected', proj['period_ending'], proj['net_pay'], None))
+
+                if r_details is not None and r_details.status_code == 200:
+                    for pe, stub_obj in r_details.json().items():
+                        conn.execute(
+                            "INSERT OR REPLACE INTO paystub_details (period_ending, data_json) VALUES (?, ?)",
+                            (pe, json.dumps(stub_obj))
+                        )
                         
                 # Write all downloaded YTD years
                 for y, data in ytd_data_by_year.items():
@@ -485,6 +638,8 @@ def main(page: ft.Page):
     # ==========================================
     # TAB 2: HOLIDAYS
     # ==========================================
+    lbl_curr_pp = ft.Text("", size=12, color=ft.Colors.GREY_600)
+
     holiday_table = ft.DataTable(
         columns=[
             ft.DataColumn(ft.Text("Holiday")),
@@ -504,15 +659,28 @@ def main(page: ft.Page):
             ).fetchall()
         finally:
             conn.close()
-        
+
+        curr_start, curr_pe = get_current_pay_period()
+        lbl_curr_pp.value = f"Current Pay Period: {curr_start.strftime('%Y-%m-%d')} to {curr_pe.strftime('%Y-%m-%d')}"
+
         holiday_table.rows.clear()
-        for name, date, day in rows:
+        for name, date_str, day in rows:
+            in_curr_pp = False
+            try:
+                h_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                in_curr_pp = (curr_start <= h_date <= curr_pe)
+            except Exception:
+                in_curr_pp = False
+
             holiday_table.rows.append(
-                ft.DataRow(cells=[
-                    ft.DataCell(ft.Text(name, size=12)),
-                    ft.DataCell(ft.Text(date, weight="bold")),
-                    ft.DataCell(ft.Text(day, size=12)),
-                ])
+                ft.DataRow(
+                    color=ft.Colors.AMBER_100 if in_curr_pp else None,
+                    cells=[
+                        ft.DataCell(ft.Text(name, size=12, weight="bold" if in_curr_pp else None)),
+                        ft.DataCell(ft.Text(date_str, weight="bold")),
+                        ft.DataCell(ft.Text(day, size=12, weight="bold" if in_curr_pp else None)),
+                    ]
+                )
             )
         page.update()
 
@@ -520,6 +688,7 @@ def main(page: ft.Page):
         padding=10,
         content=ft.Column([
             ft.Text("My Observed Holidays", size=20, weight="bold"),
+            lbl_curr_pp,
             ft.Divider(),
             ft.Column([holiday_table], scroll=ft.ScrollMode.ADAPTIVE, height=600)
         ])
@@ -529,6 +698,7 @@ def main(page: ft.Page):
     # TAB 3: PAYSTUB SUMMARY
     # ==========================================
     lbl_projected = ft.Text("Next Check: N/A", size=20, weight="bold", color=ft.Colors.GREEN_700)
+    history_limit = 5
     
     leave_table = ft.DataTable(
         columns=[ft.DataColumn(ft.Text("Leave Type")), ft.DataColumn(ft.Text("Balance"))],
@@ -542,33 +712,335 @@ def main(page: ft.Page):
         width=400
     )
 
+    paystub_dialog_content = ft.Column([], scroll=ft.ScrollMode.ADAPTIVE, spacing=8)
+    paystub_dialog = ft.AlertDialog(
+        title=ft.Text("Paystub Details"),
+        content=ft.Container(content=paystub_dialog_content, width=360, height=540),
+        actions=[
+            ft.TextButton("Close", on_click=lambda e: setattr(paystub_dialog, 'open', False) or page.update())
+        ],
+    )
+    page.overlay.append(paystub_dialog)
+
+    def _fmt_money(v):
+        if v is None: return "0.00"
+        try:
+            return f"{float(v):,.2f}"
+        except Exception:
+            return str(v)
+
+    def _fmt_num(v):
+        if v is None: return "0.00"
+        try:
+            return f"{float(v):.2f}"
+        except Exception:
+            return str(v)
+
+    def _section_header(title):
+        return ft.Container(
+            content=ft.Text(title, size=13, weight="bold", color=ft.Colors.WHITE),
+            bgcolor=ft.Colors.BLUE_800,
+            padding=ft.padding.symmetric(horizontal=8, vertical=4),
+            border_radius=4,
+        )
+
+    def _load_paystub_detail(period_ending):
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        try:
+            row = conn.execute(
+                "SELECT data_json FROM paystub_details WHERE period_ending = ?",
+                (period_ending,)
+            ).fetchone()
+            if row:
+                return json.loads(row[0])
+        finally:
+            conn.close()
+
+        # Live fallback if not cached locally
+        try:
+            r = requests.get(
+                f"{get_url()}/get_paystub_detail",
+                params={"period_ending": period_ending},
+                timeout=5
+            )
+            if r.status_code == 200:
+                data = r.json()
+                conn = sqlite3.connect(DB_NAME, timeout=10)
+                try:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO paystub_details (period_ending, data_json) VALUES (?, ?)",
+                        (period_ending, json.dumps(data))
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+                return data
+        except Exception:
+            return None
+        return None
+
+    def _populate_paystub_tables(earnings, deductions, leave, flags, remarks_raw):
+        if earnings:
+            paystub_dialog_content.controls.append(_section_header("Earnings"))
+            paystub_dialog_content.controls.append(
+                ft.Row([
+                    ft.Text("Type", size=10, weight="bold", expand=3),
+                    ft.Text("Rate", size=10, weight="bold", expand=1, text_align=ft.TextAlign.RIGHT),
+                    ft.Text("Hrs", size=10, weight="bold", expand=1, text_align=ft.TextAlign.RIGHT),
+                    ft.Text("Curr", size=10, weight="bold", expand=2, text_align=ft.TextAlign.RIGHT),
+                    ft.Text("YTD", size=10, weight="bold", expand=2, text_align=ft.TextAlign.RIGHT),
+                ])
+            )
+            for r in earnings:
+                paystub_dialog_content.controls.append(
+                    ft.Row([
+                        ft.Text(str(r.get("type", "")), size=11, expand=3),
+                        ft.Text(_fmt_num(r.get("rate")), size=10, expand=1, text_align=ft.TextAlign.RIGHT),
+                        ft.Text(_fmt_num(r.get("hours_current")), size=10, expand=1, text_align=ft.TextAlign.RIGHT),
+                        ft.Text(_fmt_money(r.get("amount_current")), size=10, expand=2, text_align=ft.TextAlign.RIGHT),
+                        ft.Text(_fmt_money(r.get("amount_ytd")), size=10, expand=2, text_align=ft.TextAlign.RIGHT),
+                    ])
+                )
+
+        if deductions:
+            paystub_dialog_content.controls.append(_section_header("Deductions"))
+            paystub_dialog_content.controls.append(
+                ft.Row([
+                    ft.Text("Type", size=10, weight="bold", expand=4),
+                    ft.Text("Current", size=10, weight="bold", expand=2, text_align=ft.TextAlign.RIGHT),
+                    ft.Text("YTD", size=10, weight="bold", expand=2, text_align=ft.TextAlign.RIGHT),
+                ])
+            )
+            for r in deductions:
+                paystub_dialog_content.controls.append(
+                    ft.Row([
+                        ft.Text(str(r.get("type", "")), size=11, expand=4),
+                        ft.Text(_fmt_money(r.get("amount_current")), size=10, expand=2, text_align=ft.TextAlign.RIGHT),
+                        ft.Text(_fmt_money(r.get("amount_ytd")), size=10, expand=2, text_align=ft.TextAlign.RIGHT),
+                    ])
+                )
+
+        if leave:
+            paystub_dialog_content.controls.append(_section_header("Leave"))
+            paystub_dialog_content.controls.append(
+                ft.Row([
+                    ft.Text("Type", size=10, weight="bold", expand=3),
+                    ft.Text("Start", size=10, weight="bold", expand=1, text_align=ft.TextAlign.RIGHT),
+                    ft.Text("Earn", size=10, weight="bold", expand=1, text_align=ft.TextAlign.RIGHT),
+                    ft.Text("Used", size=10, weight="bold", expand=1, text_align=ft.TextAlign.RIGHT),
+                    ft.Text("Adv", size=10, weight="bold", expand=1, text_align=ft.TextAlign.RIGHT),
+                    ft.Text("End", size=10, weight="bold", expand=1, text_align=ft.TextAlign.RIGHT),
+                ])
+            )
+            for r in leave:
+                l_type = str(r.get("type", ""))
+                fid = f"leave_{l_type}_end"
+                is_err = fid in flags
+                adv_val = float(r.get("advanced") or 0.0)
+                end_val = float(r.get("balance_end") or 0.0)
+                adv_err = is_err and adv_val > 0 and end_val == 0
+                end_err = is_err and not adv_err
+                paystub_dialog_content.controls.append(
+                    ft.Row([
+                        ft.Text(l_type, size=10, expand=3),
+                        ft.Text(_fmt_num(r.get("balance_start")), size=10, expand=1, text_align=ft.TextAlign.RIGHT),
+                        ft.Text(_fmt_num(r.get("earned_current")), size=10, expand=1, text_align=ft.TextAlign.RIGHT),
+                        ft.Text(_fmt_num(r.get("used_current")), size=10, expand=1, text_align=ft.TextAlign.RIGHT),
+                        ft.Text(
+                            _fmt_num(adv_val), size=10, expand=1, text_align=ft.TextAlign.RIGHT,
+                            color=ft.Colors.RED_700 if adv_err else None,
+                            weight="bold" if adv_err else None,
+                        ),
+                        ft.Text(
+                            _fmt_num(end_val), size=10, expand=1, text_align=ft.TextAlign.RIGHT,
+                            color=ft.Colors.RED_700 if end_err else None,
+                            weight="bold" if end_err else None,
+                        ),
+                    ])
+                )
+
+        if flags:
+            flag_lines = [ft.Text(f"• {msg}", size=11, color=ft.Colors.RED_800) for msg in flags.values()]
+            paystub_dialog_content.controls.append(
+                ft.Container(
+                    bgcolor=ft.Colors.RED_50,
+                    border=ft.border.all(1, ft.Colors.RED_200),
+                    border_radius=4,
+                    padding=6,
+                    content=ft.Column([ft.Text("Audit Flags", size=11, weight="bold", color=ft.Colors.RED_800)] + flag_lines, spacing=2),
+                )
+            )
+
+        remarks = (remarks_raw or "").strip()
+        if remarks:
+            paystub_dialog_content.controls.append(_section_header("Remarks"))
+            paystub_dialog_content.controls.append(
+                ft.Container(
+                    bgcolor=ft.Colors.GREY_100,
+                    border=ft.border.all(1, ft.Colors.GREY_300),
+                    border_radius=4,
+                    padding=6,
+                    content=ft.Text(remarks, size=10, font_family="monospace"),
+                )
+            )
+
+    def open_paystub_dialog(period_ending):
+        data = _load_paystub_detail(period_ending)
+        paystub_dialog_content.controls.clear()
+        paystub_dialog.title = ft.Text(f"Paystub: {period_ending}", size=16, weight="bold")
+
+        if not data:
+            paystub_dialog_content.controls.append(
+                ft.Text(
+                    "Paystub details are not cached yet.\nTap 'Sync data with PC' to download full paystubs for offline viewing.",
+                    size=13,
+                    color=ft.Colors.GREY_700,
+                )
+            )
+            paystub_dialog.open = True
+            page.update()
+            return
+
+        stub = data.get("stub", {})
+        earnings = data.get("earnings", [])
+        deductions = data.get("deductions", [])
+        leave = data.get("leave", [])
+        flags = data.get("flags", {}) or {}
+
+        # Header Card (Employee Express Replica)
+        paystub_dialog_content.controls.append(
+            ft.Container(
+                bgcolor=ft.Colors.BLUE_50,
+                border=ft.border.all(1, ft.Colors.BLUE_200),
+                border_radius=6,
+                padding=8,
+                content=ft.Column([
+                    ft.Text(stub.get("agency") or "Federal Aviation Administration", size=13, weight="bold"),
+                    ft.Text("Earnings and Leave Statement", size=11, color=ft.Colors.GREY_700),
+                    ft.Divider(height=6),
+                    ft.Row([
+                        ft.Column([
+                            ft.Text("Period Ending", size=10, color=ft.Colors.GREY_600),
+                            ft.Text(str(stub.get("period_ending", "")), size=12, weight="bold"),
+                        ], spacing=1),
+                        ft.Column([
+                            ft.Text("Pay Date", size=10, color=ft.Colors.GREY_600),
+                            ft.Text(str(stub.get("pay_date", "")), size=12, weight="bold"),
+                        ], spacing=1),
+                        ft.Column([
+                            ft.Text("Net Pay", size=10, color=ft.Colors.BLUE_800, weight="bold"),
+                            ft.Text(
+                                f"${_fmt_money(stub.get('net_pay'))}",
+                                size=13,
+                                weight="bold",
+                                color=ft.Colors.RED_700 if "net_pay" in flags else ft.Colors.GREEN_800,
+                            ),
+                        ], spacing=1, horizontal_alignment=ft.CrossAxisAlignment.END),
+                    ], alignment="spaceBetween"),
+                ], spacing=2),
+            )
+        )
+
+        # Pay Summary
+        paystub_dialog_content.controls.append(_section_header("Your Pay Consists of"))
+        for s_lbl, s_val, is_err in [
+            ("Gross Pay", _fmt_money(stub.get("gross_pay")), "gross_pay" in flags),
+            ("Total Deductions", _fmt_money(stub.get("total_deductions")), False),
+            ("Net Pay", _fmt_money(stub.get("net_pay")), "net_pay" in flags),
+        ]:
+            paystub_dialog_content.controls.append(
+                ft.Row([
+                    ft.Text(s_lbl, size=12, weight="bold" if s_lbl == "Net Pay" else None),
+                    ft.Text(
+                        f"${s_val}",
+                        size=12,
+                        weight="bold" if (s_lbl == "Net Pay" or is_err) else None,
+                        color=ft.Colors.RED_700 if is_err else None,
+                    ),
+                ], alignment="spaceBetween")
+            )
+
+        _populate_paystub_tables(earnings, deductions, leave, flags, stub.get("remarks"))
+        paystub_dialog.open = True
+        page.update()
+
+    def show_more_history(e):
+        nonlocal history_limit
+        history_limit += 5
+        load_paystub_summary()
+
+    btn_show_more = ft.OutlinedButton(
+        "Show More",
+        on_click=show_more_history,
+        visible=False,
+        width=400,
+    )
+
     def load_paystub_summary():
         conn = sqlite3.connect(DB_NAME, timeout=10)
         try:
             rows = conn.execute("SELECT type, label, value1 FROM paystub_summary").fetchall()
         finally:
             conn.close()
-            
+
         leave_table.rows.clear()
         history_table.rows.clear()
         lbl_projected.value = "Next Check: N/A"
-        
+
         pending_bump = calculate_pending_bump()
-        
+        pending_leave_mins = calculate_pending_leave_used()
+        history_rows = []
+
         for r_type, label, val in rows:
             if r_type == 'projected':
                 est_net = val + pending_bump
                 lbl_projected.value = f"Next Check ({label}): ${est_net:,.2f}"
             elif r_type == 'leave':
+                l_key = map_leave_balance_key(label)
+                deduct_mins = pending_leave_mins.get(l_key, 0) if l_key else 0
+                if deduct_mins > 0:
+                    adj_min = hmm_to_min(val) - deduct_mins
+                    adj_val = min_to_hmm(adj_min)
+                    deduct_dot = min_to_hmm(deduct_mins)
+                    bal_text = f"{adj_val:.2f} (-{deduct_dot:.2f})"
+                else:
+                    bal_text = f"{val:.2f}"
                 leave_table.rows.append(ft.DataRow(cells=[
-                    ft.DataCell(ft.Text(label)), 
-                    ft.DataCell(ft.Text(f"{val:.2f}"))
+                    ft.DataCell(ft.Text(label)),
+                    ft.DataCell(ft.Text(
+                        bal_text,
+                        color=ft.Colors.ORANGE_800 if deduct_mins > 0 else None,
+                        weight="bold" if deduct_mins > 0 else None
+                    ))
                 ]))
             elif r_type == 'history':
-                history_table.rows.append(ft.DataRow(cells=[
-                    ft.DataCell(ft.Text(label)), 
-                    ft.DataCell(ft.Text(f"${val:,.2f}"))
-                ]))
+                history_rows.append((label, val))
+
+        history_rows.sort(key=lambda x: x[0], reverse=True)
+        visible_history = history_rows[:history_limit]
+
+        for label, val in visible_history:
+            history_table.rows.append(ft.DataRow(cells=[
+                ft.DataCell(
+                    ft.Container(
+                        content=ft.Text(
+                            label,
+                            color=ft.Colors.BLUE_700,
+                            weight="bold",
+                            style=ft.TextStyle(decoration=ft.TextDecoration.UNDERLINE),
+                        ),
+                        on_click=lambda e, pe=label: open_paystub_dialog(pe),
+                    )
+                ),
+                ft.DataCell(ft.Text(f"${val:,.2f}"))
+            ]))
+
+        if len(history_rows) > history_limit:
+            btn_show_more.text = f"Show More ({len(visible_history)} of {len(history_rows)})"
+            btn_show_more.visible = True
+        else:
+            btn_show_more.visible = False
+
         page.update()
 
     tab_paystub_content = ft.Container(
@@ -582,6 +1054,7 @@ def main(page: ft.Page):
             ft.Divider(),
             ft.Text("Recent History", size=16, weight="bold"),
             history_table,
+            btn_show_more,
         ], scroll=ft.ScrollMode.ADAPTIVE, height=650)
     )
 

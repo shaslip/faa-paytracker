@@ -84,17 +84,31 @@ def run_full_audit(data):
     
     # User Note: 8.50 means 8 hours 50 minutes for Leave
     def to_min(v): 
-        if v is None: return 0
-        h = int(v); m = round((v-h)*100)
-        return (h*60) + m
-    def to_dot(m): return (m//60) + ((m%60)/100.0)
+        if v is None or pd.isna(v): return 0
+        sign = -1 if v < 0 else 1
+        av = abs(float(v))
+        h = int(av); m = round((av - h) * 100)
+        return sign * ((h * 60) + m)
+    def to_dot(m):
+        sign = -1 if m < 0 else 1
+        am = abs(m)
+        return sign * ((am // 60) + ((am % 60) / 100.0))
+
+    prev_adv_map = data.get('prev_leave_advanced')
 
     for _, row in data['leave'].iterrows():
         if row['type'] in EXEMPT: continue
-        s_min = to_min(row['balance_start'])
+        adv_val = row['advanced'] if 'advanced' in row.index and pd.notna(row['advanced']) else 0.0
+        prev_adv_val = prev_adv_map.get(row['type'], 0.0) if isinstance(prev_adv_map, dict) else 0.0
+
+        # If this is the earliest stub in the DB and it started already in leave debt, skip
+        if prev_adv_map is None and to_min(row['balance_start']) == 0 and to_min(adv_val) > 0:
+            continue
+
+        s_min = to_min(row['balance_start']) - to_min(prev_adv_val)
         e_min = to_min(row['earned_current'])
         u_min = to_min(row['used_current'])
-        end_act = to_min(row['balance_end'])
+        end_act = to_min(row['balance_end']) - to_min(adv_val)
         
         calc = s_min + e_min - u_min
         if abs(calc - end_act) > 1:
@@ -426,6 +440,7 @@ def calculate_expected_pay(buckets_df, base_rate, actual_meta, ref_deductions, a
                     'balance_start': bal_start,
                     'earned_current': earned, 
                     'used_current': 0.0, 
+                    'advanced': 0.0,
                     'balance_end': end
                 })
     l_df = pd.DataFrame(l_rows)
